@@ -1,0 +1,9 @@
+# Ignore data and models
+data/
+*.pth
+*.pt
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

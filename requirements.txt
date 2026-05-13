@@ -1,0 +1,13 @@
+# --- Core Math & Vision ---
+numpy           # Array manipulation and math
+opencv-python   # Image processing and Sobel gradients (cv2)
+scipy           # Loading the .mat ground-truth labels
+
+# --- Visualization & Exploration ---
+matplotlib      # Plotting the images and masks
+ipykernel       # Allows Jupyter Notebooks to run inside your Conda env
+
+# --- Deep Learning (Phase 2) ---
+torch           # PyTorch core
+torchvision     # PyTorch vision tools (transforms, etc.)
+tqdm            # Progress bars for your training loops
