@@ -1,4 +1,4 @@
-# Project Documentation: Geometric-Semantic Fusion for Autonomous Robotic Affordance
+# Geometric-Semantic Fusion for Autonomous Robotic Affordance
 
 ## 1. Project Overview
 **Title:** Spatial Resolution Recovery and Multi-Task Geometric Estimation for Robotic Affordance Perception.
