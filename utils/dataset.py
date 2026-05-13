@@ -5,21 +5,24 @@ import scipy.io as sio
 import torch
 from torch.utils.data import Dataset
 import torchvision.transforms as transforms
-from utils.geometry import compute_normals
 
 class UMDAffordanceDataset(Dataset):
-    def __init__(self, base_dir):
+    def __init__(self, raw_dir, processed_dir, crop_size=448):
         """
         Args:
-            base_dir: Path to 'data/raw/part-affordance-dataset/tools'
+            raw_dir: Path to 'data/raw/part-affordance-dataset/tools'
+            processed_dir: Path to 'data/processed/umd_normals'
+            crop_size: The square size for DINOv2 (default 448)
         """
-        self.base_dir = base_dir
+        self.raw_dir = raw_dir
+        self.processed_dir = processed_dir
+        self.crop_size = crop_size
         self.samples = []
         self.to_tensor = transforms.ToTensor()
 
-        # Dynamically find all valid 8-digit frames in the dataset
-        for tool in os.listdir(base_dir):
-            tool_path = os.path.join(base_dir, tool)
+        # We look in raw_dir to find all the valid frame indices
+        for tool in os.listdir(raw_dir):
+            tool_path = os.path.join(raw_dir, tool)
             if not os.path.isdir(tool_path): 
                 continue
             
@@ -28,48 +31,52 @@ class UMDAffordanceDataset(Dataset):
                     frame_idx_str = file.split('_')[-2] 
                     self.samples.append((tool, frame_idx_str))
 
+    def center_crop(self, img):
+        """Helper to crop images to the center square."""
+        h, w = img.shape[:2]
+        top = (h - self.crop_size) // 2
+        left = (w - self.crop_size) // 2
+        return img[top:top+self.crop_size, left:left+self.crop_size]
+
     def __len__(self):
-        """Tells PyTorch exactly how many valid samples we have."""
         return len(self.samples)
 
     def __getitem__(self, idx):
-        """Fetches exactly one sample and translates it into Tensors."""
         tool, frame_idx_str = self.samples[idx]
         
-        # 1. File Paths
-        prefix = os.path.join(self.base_dir, tool, f"{tool}_{frame_idx_str}")
-        rgb_path = f"{prefix}_rgb.jpg"
-        depth_path = f"{prefix}_depth.png"
-        label_path = f"{prefix}_label.mat"
+        # 1. Construct Paths
+        raw_prefix = os.path.join(self.raw_dir, tool, f"{tool}_{frame_idx_str}")
+        proc_prefix = os.path.join(self.processed_dir, tool, f"{tool}_{frame_idx_str}")
         
-        # 2. Load Raw Data
-        rgb = cv2.cvtColor(cv2.imread(rgb_path), cv2.COLOR_BGR2RGB)
-        depth = cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH)
-        labels = sio.loadmat(label_path)['gt_label']
+        # 2. Load Raw Data (RGB and Labels)
+        rgb = cv2.cvtColor(cv2.imread(f"{raw_prefix}_rgb.jpg"), cv2.COLOR_BGR2RGB)
+        labels = sio.loadmat(f"{raw_prefix}_label.mat")['gt_label']
         
-        # 3. Create Targets
-        # Mask: 1 for Grasp/Wrap-Grasp, 0 for Background
-        mask = np.isin(labels, [1, 7]).astype(np.float32)
+        # 3. Load Processed Data (Precomputed Normals)
+        normals_path = f"{proc_prefix}_normal.npy"
+        # We use np.load for speed
+        normals_raw = np.load(normals_path) 
         
-        # Normals: We compute them dynamically using our validated math
-        normals_raw, _ = compute_normals(depth)
+        # 4. Apply Center Crop to RGB and Labels
+        rgb_cropped = self.center_crop(rgb)
+        labels_cropped = self.center_crop(labels)
         
-        # 4. Convert to PyTorch Tensors [Channels, Height, Width]
-        # RGB becomes [3, 480, 640] and scaled to [0.0, 1.0]
-        rgb_tensor = self.to_tensor(rgb) 
+        # 5. Create Mask from cropped labels
+        # 1 = grasp, 7 = wrap-grasp
+        mask = np.isin(labels_cropped, [1, 7]).astype(np.float32)
         
-        # Depth becomes [1, 480, 640] scaled to meters
-        depth_tensor = torch.from_numpy(depth.astype(np.float32)).unsqueeze(0) / 1000.0 
+        # 6. Convert to PyTorch Tensors
+        # RGB: [3, 448, 448]
+        rgb_tensor = self.to_tensor(rgb_cropped) 
         
-        # Mask becomes [1, 480, 640]
+        # Mask: [1, 448, 448]
         mask_tensor = torch.from_numpy(mask).unsqueeze(0)
         
-        # Normals become [3, 480, 640]
-        normals_tensor = torch.from_numpy(normals_raw.astype(np.float32)).permute(2, 0, 1)
+        # Normals: [3, 448, 448]
+        normals_tensor = torch.from_numpy(normals_raw).permute(2, 0, 1)
 
         return {
             'rgb': rgb_tensor,
-            'depth': depth_tensor,
             'mask': mask_tensor,
             'normals': normals_tensor,
             'tool_name': tool

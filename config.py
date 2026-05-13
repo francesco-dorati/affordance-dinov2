@@ -8,7 +8,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 # --- DATA PATHS ---
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_TOOLS = DATA_DIR / "raw" / "part-affordance-dataset" / "tools"
-PROCESSED_DIR = DATA_DIR / "processed_umd"
+PROCESSED_DIR = DATA_DIR / "processed"
+PROCESSED_TOOLS = PROCESSED_DIR / "normals"
 
 # --- MODEL HYPERPARAMETERS (For Phase 2) ---
 # We will populate these later, but setting the skeleton up now!
