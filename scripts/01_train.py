@@ -123,8 +123,8 @@ def main():
     print(f"Dataset split: {len(train_dataset)} training samples, {len(val_dataset)} validation samples.")
 
     # Create DataLoaders for batching and shuffling
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
 
     # =====================================================================
     # >> 3. MODEL, OPTIMIZER, AND LOSS INITIALIZATION
