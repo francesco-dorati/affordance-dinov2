@@ -13,6 +13,10 @@ class UMDAffordanceDataset(Dataset):
         self.crop_size = crop_size
         self.samples = []
         self.to_tensor = transforms.ToTensor()
+        self.normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        )
 
         for tool in os.listdir(raw_dir):
             tool_path = os.path.join(raw_dir, tool)
@@ -54,7 +58,7 @@ class UMDAffordanceDataset(Dataset):
         mask = np.isin(labels_cropped, [1, 7]).astype(np.float32)
         
         # 5. Convert to Tensors
-        rgb_tensor = self.to_tensor(rgb_cropped) 
+        rgb_tensor = self.normalize(self.to_tensor(rgb_cropped))
         mask_tensor = torch.from_numpy(mask).unsqueeze(0)
         normals_tensor = torch.from_numpy(normals_raw).permute(2, 0, 1)
 

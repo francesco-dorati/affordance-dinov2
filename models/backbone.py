@@ -29,6 +29,10 @@ class DINOv2Backbone(nn.Module):
         # Get the spatial dimensions of the input
         B, C, H, W = x.shape
         
+        # Ensure input dimensions are divisible by the patch size (14)
+        assert H % 14 == 0 and W % 14 == 0, \
+            f"Input height and width must be divisible by 14. Got {H}x{W}."
+        
         # DINOv2 expects inputs normalized using ImageNet stats, 
         # but for a frozen feature extractor on our dataset, raw [0,1] is often an okay start.
         # (We will add formal ImageNet normalization in the DataLoader later if needed).
