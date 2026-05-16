@@ -8,222 +8,138 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from pathlib import Path
 import numpy as np
+import argparse  # Added for Colab inputs
 
 # --- Path Setup ---
-# Add the project root to the Python path to allow for absolute imports
-# This is essential for running the script from any location.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-# --- Custom Module Imports ---
-# Configuration, models, and dataset utilities defined in other files
-from config import RAW_TOOLS, PROJECT_ROOT
+from config import RAW_TOOLS
 from models.backbone import DINOv2Backbone
 from models.decoder import MultiTaskDecoder
 from utils.dataset import UMDAffordanceDataset
 
 # =====================================================================
-# >> 1. HYPERPARAMETERS & CONFIGURATION
+# >> 1. ARGUMENT PARSER (The "Inputs")
 # =====================================================================
+def get_args():
+    parser = argparse.ArgumentParser(description="Train Affordance Decoder")
+    parser.add_y_argument = parser.add_argument
+    parser.add_y_argument('--resume', action='store_true', help='Resume from last checkpoint')
+    parser.add_y_argument('--use_drive', action='store_true', help='Save/Load from Google Drive')
+    parser.add_y_argument('--epochs', type=int, default=25)
+    parser.add_y_argument('--batch_size', type=int, default=8)
+    parser.add_y_argument('--lr', type=float, default=1e-4)
+    return parser.parse_args()
 
-# --- Training Settings ---
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-NUM_EPOCHS = 25
-BATCH_SIZE = 8
-LEARNING_RATE = 1e-4
-
-# --- Data & Model Paths ---
-DATA_DIR = RAW_TOOLS
-CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
-CHECKPOINT_DIR.mkdir(exist_ok=True) # Create directory if it doesn't exist
-
-# --- Loss Balancing ---
-# These weights determine the importance of each task.
-# If the model struggles with one task, adjusting these can help.
-MASK_LOSS_WEIGHT = 1.0
-NORMAL_LOSS_WEIGHT = 5.0 # Give normals a higher weight to encourage geometric learning
-
-
+# --- Loss Function ---
 def calculate_masked_cosine_loss(pred_normals, gt_normals, gt_mask):
-    """
-    Calculates the Cosine Similarity loss only on the 'active' pixels 
-    of the ground truth affordance mask. This prevents the model from being
-    penalized for random normal predictions in the background.
-
-    Args:
-        pred_normals (Tensor): Predicted normals [B, 3, H, W]
-        gt_normals (Tensor): Ground truth normals [B, 3, H, W]
-        gt_mask (Tensor): Ground truth affordance mask [B, 1, H, W]
-
-    Returns:
-        Tensor: A single scalar value for the batch loss.
-    """
-    # Ensure normals are unit vectors, which is crucial for cosine similarity
     pred_normals = F.normalize(pred_normals, p=2, dim=1)
     gt_normals = F.normalize(gt_normals, p=2, dim=1)
-
-    # Calculate cosine similarity across the channel dimension (dim=1)
-    # The result is a map of similarity scores, shape [B, H, W]
     similarity = F.cosine_similarity(pred_normals, gt_normals, dim=1)
-
-    # The loss is 1 minus the similarity. We want to maximize similarity (-> 1), 
-    # which means minimizing the loss (-> 0).
     loss_map = 1 - similarity
-
-    # Create a boolean mask where the ground truth affordance is present
-    active_mask = (gt_mask > 0).squeeze(1) # Shape: [B, H, W]
-
-    # If there are no active pixels in the batch, return a zero loss
+    active_mask = (gt_mask > 0).squeeze(1)
     if active_mask.sum() == 0:
         return torch.tensor(0.0, device=pred_normals.device, requires_grad=True)
-
-    # Apply the mask to the loss map to select values only from active regions
-    masked_loss = loss_map[active_mask]
-
-    # Return the mean of the loss over the active pixels
-    return masked_loss.mean()
-
+    return loss_map[active_mask].mean()
 
 def main():
-    """
-    Main function to orchestrate the model training pipeline.
-    """
-    print(f"Using device: {DEVICE}")
-    print(f"Loading data from: {DATA_DIR}")
+    args = get_args()
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # --- Drive Logic ---
+    if args.use_drive:
+        CHECKPOINT_DIR = Path("/content/drive/MyDrive/robotic_affordance_project/checkpoints")
+    else:
+        CHECKPOINT_DIR = PROJECT_ROOT / "checkpoints"
+    
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Checkpoint directory: {CHECKPOINT_DIR}")
 
-    # =====================================================================
-    # >> 2. DATA LOADING
-    # =====================================================================
-    # Instantiate the dataset. Normals are computed on-the-fly.
-    dataset = UMDAffordanceDataset(raw_dir=DATA_DIR)
-
-    # --- Instance-Based Data Split ---
-    # To properly test generalization, we must ensure that the model is validated
-    # on tool *instances* it has never seen during training. A simple random
-    # split would cause data leakage (e.g., frames of 'knife_01' in both train and val).
+    # --- Data Prep ---
+    dataset = UMDAffordanceDataset(raw_dir=RAW_TOOLS)
     all_tools = sorted(list(set([s[0] for s in dataset.samples])))
-    np.random.seed(42) # Use a fixed seed for reproducible splits
+    np.random.seed(42)
     np.random.shuffle(all_tools)
-
-    # Split the list of tool names into 80% train, 20% validation
     split_idx = int(0.8 * len(all_tools))
     train_tools = set(all_tools[:split_idx])
-    val_tools = set(all_tools[split_idx:])
-
-    print(f"Found {len(all_tools)} unique tool instances.")
-    print(f"Splitting into {len(train_tools)} training instances and {len(val_tools)} validation instances.")
-
-    # Create lists of indices corresponding to the train/val tool instances
+    
     train_indices = [i for i, s in enumerate(dataset.samples) if s[0] in train_tools]
-    val_indices = [i for i, s in enumerate(dataset.samples) if s[0] in val_tools]
+    val_indices = [i for i, s in enumerate(dataset.samples) if s[0] not in train_tools]
 
-    train_dataset = Subset(dataset, train_indices)
-    val_dataset = Subset(dataset, val_indices)
+    train_loader = DataLoader(Subset(dataset, train_indices), batch_size=args.batch_size, shuffle=True, num_workers=2, pin_memory=True)
+    val_loader = DataLoader(Subset(dataset, val_indices), batch_size=args.batch_size, shuffle=False, num_workers=2, pin_memory=True)
 
-    print(f"Dataset split: {len(train_dataset)} training samples, {len(val_dataset)} validation samples.")
-
-    # Create DataLoaders for batching and shuffling
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
-
-    # =====================================================================
-    # >> 3. MODEL, OPTIMIZER, AND LOSS INITIALIZATION
-    # =====================================================================
-    # Load the frozen DINOv2 backbone
+    # --- Model Setup ---
     backbone = DINOv2Backbone(freeze=True).to(DEVICE)
-    backbone.eval() # Set to evaluation mode as it's frozen
-
-    # Initialize the custom multi-task decoder
     decoder = MultiTaskDecoder().to(DEVICE)
-
-    # The optimizer only needs to update the weights of the decoder
-    optimizer = optim.Adam(decoder.parameters(), lr=LEARNING_RATE)
-
-    # Standard Binary Cross-Entropy for the binary affordance mask
+    optimizer = optim.Adam(decoder.parameters(), lr=args.lr)
     mask_criterion = nn.BCELoss()
 
     # =====================================================================
-    # >> 4. TRAINING & VALIDATION LOOP
+    # >> 2. RESUME LOGIC
     # =====================================================================
+    start_epoch = 0
     best_val_loss = float('inf')
+    checkpoint_path = CHECKPOINT_DIR / "last_checkpoint.pth"
 
-    print("Starting training...")
-    for epoch in range(NUM_EPOCHS):
-        # --- Training Phase ---
+    if args.resume and checkpoint_path.exists():
+        print(f"🔄 Resuming from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
+        decoder.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_val_loss = checkpoint['best_val_loss']
+        print(f"Resuming from Epoch {start_epoch}, Best Val Loss was: {best_val_loss:.4f}")
+
+    # --- Training Loop ---
+    for epoch in range(start_epoch, args.epochs):
+        # [TRAIN PHASE]
         decoder.train()
-        train_loss_mask, train_loss_normal, train_loss_total = 0, 0, 0
-        
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [TRAIN]")
+        train_loss = 0
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [TRAIN]")
         for batch in pbar:
-            rgb = batch['rgb'].to(DEVICE)
-            gt_mask = batch['mask'].to(DEVICE)
-            gt_normals = batch['normals'].to(DEVICE)
-
+            rgb, gt_mask, gt_normals = batch['rgb'].to(DEVICE), batch['mask'].to(DEVICE), batch['normals'].to(DEVICE)
             optimizer.zero_grad()
-
-            # --- Forward Pass ---
-            with torch.no_grad(): # Backbone is frozen, no gradients needed
-                features = backbone(rgb)
+            with torch.no_grad(): features = backbone(rgb)
             pred_mask, pred_normals = decoder(features)
-
-            # --- Loss Calculation ---
+            
             loss_mask = mask_criterion(pred_mask, gt_mask)
-            loss_normal = calculate_masked_cosine_loss(pred_normals, gt_normals, gt_mask)
-            total_loss = (MASK_LOSS_WEIGHT * loss_mask) + (NORMAL_LOSS_WEIGHT * loss_normal)
-
-            # --- Backward Pass & Optimization ---
+            loss_norm = calculate_masked_cosine_loss(pred_normals, gt_normals, gt_mask)
+            total_loss = loss_mask + (5.0 * loss_norm)
+            
             total_loss.backward()
             optimizer.step()
-
-            train_loss_mask += loss_mask.item()
-            train_loss_normal += loss_normal.item()
-            train_loss_total += total_loss.item()
+            train_loss += total_loss.item()
             pbar.set_postfix(loss=total_loss.item())
 
-        # --- Validation Phase ---
+        # [VAL PHASE]
         decoder.eval()
-        val_loss_mask, val_loss_normal, val_loss_total = 0, 0, 0
-        
+        val_loss = 0
         with torch.no_grad():
-            pbar_val = tqdm(val_loader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS} [VAL]")
-            for batch in pbar_val:
-                rgb = batch['rgb'].to(DEVICE)
-                gt_mask = batch['mask'].to(DEVICE)
-                gt_normals = batch['normals'].to(DEVICE)
-
+            for batch in val_loader:
+                rgb, gt_mask, gt_normals = batch['rgb'].to(DEVICE), batch['mask'].to(DEVICE), batch['normals'].to(DEVICE)
                 features = backbone(rgb)
                 pred_mask, pred_normals = decoder(features)
+                total_loss = mask_criterion(pred_mask, gt_mask) + (5.0 * calculate_masked_cosine_loss(pred_normals, gt_normals, gt_mask))
+                val_loss += total_loss.item()
 
-                loss_mask = mask_criterion(pred_mask, gt_mask)
-                loss_normal = calculate_masked_cosine_loss(pred_normals, gt_normals, gt_mask)
-                total_loss = (MASK_LOSS_WEIGHT * loss_mask) + (NORMAL_LOSS_WEIGHT * loss_normal)
+        avg_val_loss = val_loss / len(val_loader)
+        print(f"Epoch {epoch+1} Summary | Train Loss: {train_loss/len(train_loader):.4f} | Val Loss: {avg_val_loss:.4f}")
 
-                val_loss_mask += loss_mask.item()
-                val_loss_normal += loss_normal.item()
-                val_loss_total += total_loss.item()
-                pbar_val.set_postfix(val_loss=total_loss.item())
-
-        # --- Logging Epoch Results ---
-        print(f"\n--- Epoch {epoch+1} Summary ---")
-        print(f"Train | Total Loss: {train_loss_total/len(train_loader):.4f}, Mask Loss: {train_loss_mask/len(train_loader):.4f}, Normal Loss: {train_loss_normal/len(train_loader):.4f}")
-        avg_val_loss = val_loss_total / len(val_loader)
-        print(f"Val   | Total Loss: {avg_val_loss:.4f}, Mask Loss: {val_loss_mask/len(val_loader):.4f}, Normal Loss: {val_loss_normal/len(val_loader):.4f}")
-        print("-" * 30)
-
-        # --- Save Best Model Checkpoint ---
+        # --- SAVE CHECKPOINT (Save everything needed to resume) ---
+        checkpoint_data = {
+            'epoch': epoch,
+            'model_state_dict': decoder.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'best_val_loss': best_val_loss,
+        }
+        torch.save(checkpoint_data, checkpoint_path) # Save as the "latest"
+        
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
-            best_model_path = CHECKPOINT_DIR / "best_decoder.pth"
-            torch.save(decoder.state_dict(), best_model_path)
-            print(f"🎉 New best model saved to {best_model_path}")
-
-    # =====================================================================
-    # >> 5. SAVE FINAL MODEL
-    # =====================================================================
-    final_model_path = CHECKPOINT_DIR / "final_decoder.pth"
-    torch.save(decoder.state_dict(), final_model_path)
-    print(f"Training complete. Final model saved to {final_model_path}")
-
+            torch.save(decoder.state_dict(), CHECKPOINT_DIR / "best_decoder.pth")
+            print(f"🎉 New Best Model Saved!")
 
 if __name__ == "__main__":
     main()
