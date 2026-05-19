@@ -1,105 +1,289 @@
 # Geometric-Semantic Fusion for Autonomous Robotic Affordance
 
 ## 1. Project Overview
-**Title:** Spatial Resolution Recovery and Multi-Task Geometric Estimation for Robotic Affordance Perception.
 
-**Objective:** To develop a high-precision perception pipeline that identifies "affordances" (actionable regions) on unseen objects. The system bridges the gap between high-level semantic understanding (what an object is) and low-level robotic execution (where and how to grab it) by directly predicting pixel-perfect masks and surface normals.
+**Title:** Spatial Resolution Recovery and Multi-Task Geometric Estimation for
+Robotic Affordance Perception.
 
-**Motivation:**
-Most robotic manipulation systems rely on pre-defined 3D CAD models. This project aims to enable "Zero-Shot" interaction. When a robot encounters a novel tool or object, it must identify the specific affordance region (e.g., the handle for grasping) and determine the correct approach orientation (surface normal) directly from sensory data, without relying on complex, real-time 3D point cloud reconstruction.
+**Objective:** Develop a high-precision perception pipeline that identifies
+"affordances" (actionable regions) on unseen objects. The system bridges
+high-level semantic understanding (what an object is) and low-level robotic
+execution (where and how to grab it) by directly predicting pixel-perfect
+affordance masks and surface normals.
+
+**Motivation:** Most robotic manipulation systems rely on pre-defined 3D CAD
+models. This project enables "zero-shot" interaction. When a robot encounters a
+novel tool, it must identify the specific affordance region (e.g. the handle
+for grasping) and the correct approach orientation (surface normal) directly
+from sensory data, without real-time 3D point cloud reconstruction.
+
+This codebase is the final project for a Computer Vision course and is also
+intended to evolve into a perception module for a humanoid robotics startup.
 
 ---
 
 ## 2. High-Level System Architecture
-The system accepts multi-modal sensory data and uses a multi-task neural network to produce a deterministic robotic approach packet. 
 
-### Global Inputs (Sensory Layer)
-* **RGB Image:** $448 \times 448 \times 3$ (Color/Texture features).
-* **Depth Map:** $448 \times 448 \times 1$ (Used strictly for generating Ground Truth normals, and optionally evaluated as a direct network input in an RGB-D variant).
+The system accepts multi-modal sensory data and uses a multi-task neural
+network to produce a deterministic robotic approach packet.
 
-### Global Outputs (Action Layer)
-* **2D Affordance Mask:** A high-resolution segmentation map ($448 \times 448 \times 1$) identifying the actionable part.
-* **Dense Surface Normal Map:** A 3D unit vector map ($448 \times 448 \times 3$) representing the orientation ($N_x, N_y, N_z$) of the surface for a collision-free approach.
-* **3D Approach Centroid:** The $(X, Y, Z)$ coordinate of the target, derived from the center of the predicted mask and its corresponding depth value.
+### Global inputs (sensory layer)
+
+- **RGB image:** 448 × 448 × 3 (color and texture features).
+- **Depth map:** 448 × 448 × 1 (used to generate ground-truth normals during
+  training; reserved for an RGB-D variant on the input side).
+
+### Global outputs (action layer)
+
+- **2D affordance mask:** 448 × 448 × 1 high-resolution segmentation of the
+  actionable region.
+- **Dense surface normal map:** 448 × 448 × 3 unit-vector field representing
+  surface orientation (`N_x, N_y, N_z`) for a collision-free approach.
+- **3D approach centroid:** the (X, Y, Z) coordinate of the target, derived
+  from the centroid of the predicted mask and its corresponding depth value,
+  back-projected through the calibrated camera intrinsics.
 
 ---
 
 ## 3. Detailed Pipeline Stages
 
-### Stage 1: Semantic Feature Extraction (The Sensor)
-**Description:** Utilizes a frozen Vision Transformer (DINOv2) to extract global semantic features. Because DINOv2 is trained on a massive diverse dataset, it recognizes functional parts across novel objects.
-* **Input:** RGB Image ($448 \times 448 \times 3$).
-* **Process:** ViT Patch Embedding and Transformer encoding.
-* **Output:** Semantic Feature Tokens ($32 \times 32 \times d$), where $d$ is the embedding dimension.
+### Stage 1 — Semantic feature extraction (the sensor)
 
-### Stage 2: Multi-Task Convolutional Refinement (The Learning Core)
-**Description:** DINOv2 outputs low-resolution tokens. The CNN Decoder performs "Spatial Resolution Recovery" by fusing high-level semantic tokens with low-level spatial features. It simultaneously predicts the affordance mask and the local geometry. Two input variants (Pure RGB vs. RGB-D) are evaluated for optimal robustness.
-* **Input:** Semantic Feature Tokens + Skip Connections.
-* **Process:** Transposed Convolutions expanding into a dual-head output.
-* **Output:** A combined $448 \times 448 \times 4$ tensor (Channel 1: Affordance Probability, Channels 2-4: Surface Normal Vectors).
+A frozen DINOv2 ViT-Small extracts semantic features at multiple depths.
+Rather than tapping only the final transformer block, the backbone returns
+features from four intermediate layers (default: layers 2, 5, 8, 11). Earlier
+blocks retain more local detail before global self-attention has fully
+diffused it; this is the same insight that underpins the DPT architecture and
+substantially improves downstream dense-prediction quality.
 
-### Stage 3: Actionable Inference (The Robotics Core)
-**Description:** Extracts the final robotic commands from the network's output tensors, translating pixel predictions into physical coordinates using the camera intrinsics.
-* **Process:** Calculate the 2D centroid $(u, v)$ of the predicted affordance mask. Sample the depth $Z$ at $(u, v)$ and use Inverse Perspective Mapping to find $(X, Y, Z)$. Sample the predicted Normal Map at $(u, v)$ to get the approach vector.
-* **Output:** The final robotic pose $(X, Y, Z, N_x, N_y, N_z)$.
+- **Implementation:** `models/backbone.py` → `DINOv2Backbone`
+- **Output:** list of four tensors, each `[B, 384, 32, 32]`.
+
+### Stage 2 — Multi-task convolutional refinement (the learning core)
+
+The decoder performs "spatial resolution recovery" from a 32 × 32 token grid
+back to a 448 × 448 dense prediction, and predicts the affordance mask and
+local surface geometry simultaneously.
+
+Three structural decisions matter for geometric precision:
+
+1. **Multi-scale ViT fusion at 32 × 32.** Each of the four ViT layers is
+   1 × 1-projected and concatenated, then fused by a ConvBlock.
+2. **RGB skip connections.** A small trainable CNN stem (`RGBStem`) produces
+   high-frequency features at 56 / 112 / 224 / 448 resolutions. These are
+   concatenated into the decoder at each upsampling stage, supplying the
+   spatial detail the ViT alone cannot reconstruct.
+3. **LOGITS output for the mask head.** The decoder returns raw logits
+   (paired with `BCEWithLogitsLoss` for numerical stability) instead of
+   applying `sigmoid` internally. The normal head has its own small refinement
+   block so it does not compete with the mask head's filters in the shared
+   trunk.
+
+- **Implementation:** `models/decoder.py` → `MultiTaskDecoder`
+- **Output:** `(mask_logits, normal_pred)` where `normal_pred` is L2-normalized
+  to unit vectors.
+
+### Stage 3 — Actionable inference (the robotics core)
+
+The final robotic command is extracted from the network outputs and combined
+with the camera intrinsics:
+
+- Compute the 2D centroid (u, v) of the predicted affordance mask.
+- Sample depth Z at (u, v); use inverse perspective mapping to find (X, Y, Z).
+- Sample the predicted normal map at (u, v) to get the approach vector.
+
+The intrinsics come from `config.INFERENCE_INTRINSICS`, which can be swapped
+per deployment without touching code.
+
+**Output:** the final robotic pose (X, Y, Z, N_x, N_y, N_z).
 
 ---
 
-## 4. Datasets & Technical Requirements
+## 4. Datasets and Technical Requirements
 
-**Primary Dataset:** UMD Part Affordance Dataset. Features real-world RGB-D captures from a Kinect sensor, containing 105 kitchen, workshop, and gardening tools. Labeling includes explicit verb-based affordance labels (e.g., 1 = grasp).
+**Primary dataset:** UMD Part Affordance Dataset. Real-world RGB-D captures
+from a Kinect sensor, 105 kitchen, workshop, and gardening tools, labeled
+with verb-based affordance categories (we use class 1 = grasp and 7 =
+wrap-grasp as the positive mask).
 
-**In-The-Wild Test Set:** Custom dataset captured using a modern depth camera in an office environment. This contains completely novel objects (mugs, tools) under varied lighting to strictly evaluate the model's qualitative Sim-to-Real generalization.
+**In-the-wild test set:** custom captures from a modern depth camera in an
+office, containing completely novel objects under varied lighting, used to
+evaluate sim-to-real generalization qualitatively.
 
 **Framework:** PyTorch.
 
-**Evaluation Metrics:** IoU (Intersection over Union) for 2D mask accuracy, and Mean Angular Error (Cosine Similarity) for surface normal vector accuracy.
+**Evaluation metrics:**
+
+- **IoU** (intersection over union) at threshold 0.5 for 2D mask accuracy.
+- **Mean angular error in degrees** (computed via `acos(cosine_similarity)`)
+  for surface normal accuracy over the GT mask region — more interpretable
+  than raw cosine loss.
 
 ---
 
-## 5. Workflow
+## 5. Augmentation and Loss Functions
 
-**Phase 1: Data Engineering (The Foundation)**
-* **Label Extraction:** Load the `.mat` label files and isolate the `grasp` affordance to create binary target masks.
-* **On-the-Fly Normal Generation:** Compute true physical surface normals dynamically during data loading by back-projecting the depth map using precise camera intrinsics and cross-product algebra (bypassing heavy offline storage).
-* **Data Loader:** Create a PyTorch Dataset class that outputs: `(RGB_Crop, Depth_Crop, Mask_Crop, Target_Normals)`.
+### Joint augmentation pipeline (`utils/augmentations.py`)
 
-**Phase 2: Neural Perception (The AI Brain)**
-* **Input Modality Testing:** Train and evaluate a Pure RGB baseline against an RGB-D variant to determine the optimal balance of geometric accuracy vs. sensor-fault robustness.
-* **Multi-Task Decoder:** Build the CNN decoder with two output heads.
-* **Training Loop:** Train the network using a weighted loss function (BCE Loss for segmentation + Cosine Similarity Loss for active mask geometry).
+Geometric augmentations are applied **consistently** across RGB, mask, and
+normals. When the image is rotated by θ, the normal vectors are rotated by
+the same θ in the image plane; when the image is horizontally flipped, the
+normals' x-component is negated. Without these corrections the normal
+supervision becomes physically inconsistent with the input.
 
-**Phase 3: Evaluation & Synthesis (The Result)**
-* **Quantitative Benchmarking:** Measure the Mean IoU and Angular Error on an instance-split testing strategy using the UMD dataset.
-* **Qualitative Generalization:** Run inference on the custom "In-the-Wild" office dataset to prove the pipeline correctly grounds 3D geometry on completely unseen real-world objects.
+| Augmentation | Default |
+|---|---|
+| Random rotation | ±15° |
+| Random scale | 0.85 – 1.15 |
+| Horizontal flip | p = 0.5 |
+| Brightness / contrast / saturation jitter | ±0.2 / ±0.2 / ±0.1 |
+| Hue jitter | ±0.05 |
+| Gaussian noise | σ = 0.01 |
+| Random erasing | p = 0.25 |
+
+### Loss functions (`utils/losses.py`)
+
+```
+L_total = DiceBCELoss(mask_logits, gt_mask)
+        + w_normal * masked_cosine_loss(pred_normals, gt_normals, gt_mask)
+        + w_smooth * edge_aware_normal_smoothness(pred_normals, rgb)
+```
+
+with defaults `w_normal = 5.0` and `w_smooth = 0.5`.
+
+- **`DiceBCELoss`** combines `BCEWithLogitsLoss` with soft Dice. Dice is
+  important because affordance pixels are heavily outnumbered by background.
+- **`masked_cosine_loss`** averages the cosine distance only over GT
+  affordance pixels, so the loss focuses on the regions a robot will actually
+  use.
+- **`edge_aware_normal_smoothness`** is the classic
+  `exp(-|grad RGB|)`-weighted smoothness term: encourages normals to be
+  smooth inside flat regions while allowing breaks where the RGB image has
+  edges.
 
 ---
 
-## 6. Code Structure
+## 6. Workflow
+
+### Phase 1 — Data engineering
+
+- **Label extraction:** load `.mat` label files, isolate grasp affordances
+  (classes 1 and 7) into binary target masks.
+- **On-the-fly normal generation:** back-project depth into 3D via the camera
+  intrinsics, then compute normals from cross products of finite-difference
+  tangents (`utils/geometry.compute_normals`). The dataset shifts the
+  principal point to the cropped frame so the back-projection remains
+  geometrically correct after center-cropping.
+- **Data loader:** `utils/dataset.py` (`UMDAffordanceDataset`) with optional
+  augmentation toggle and configurable intrinsics.
+
+### Phase 2 — Neural perception
+
+```bash
+# Train with default augmentation
+python scripts/train.py --epochs 25 --batch_size 8
+
+# Ablation: training without augmentation
+python scripts/train.py --epochs 25 --batch_size 8 --no_augment
+
+# Resume from last checkpoint
+python scripts/train.py --resume --epochs 50
+```
+
+The script splits the tool set 80 / 20 by name (deterministic seed) to
+enforce an instance-split evaluation — the model is tested on tools it has
+never seen during training. Checkpoints are written to `checkpoints/` (or
+`/content/drive/MyDrive/robotic_affordance_project/checkpoints/` when
+`--use_drive` is passed for Colab).
+
+### Phase 3 — Evaluation and synthesis
+
+- Quantitative: best validation IoU and mean angular error on held-out tools;
+  the training script logs both every epoch.
+- Qualitative: run inference on the in-the-wild office captures with the
+  appropriate `INFERENCE_INTRINSICS` to ground 3D geometry on unseen real
+  objects.
+
+---
+
+## 7. Code Structure
 
 ```text
-robotic_affordance_project/
+cv-project/
 │
-├── data/                       # All datasets live here (Ignored in git)
-│   ├── raw_umd/                # The raw extracted UMD dataset (tools/, clutter/)
-│   └── custom_test_set/        # Office depth camera captures for final validation
+├── data/                         # Datasets (gitignored)
+│   ├── raw/part-affordance-dataset/tools/
+│   └── custom_test_set/
 │
-├── models/                     # Phase 2: The AI Brain
-│   ├── __init__.py
-│   ├── backbone.py             # Script to load and freeze DINOv2
-│   └── multi_task_cnn.py       # Custom CNN Decoder (Mask + Normal heads)
+├── models/
+│   ├── backbone.py               # frozen DINOv2, multi-scale (4 layers)
+│   └── decoder.py                # multi-scale fusion + RGB skips + logits
 │
-├── utils/                      # Helper scripts and math functions
-│   ├── __init__.py
-│   ├── dataset.py              # PyTorch Dataset class (On-the-fly math & cropping)
-│   ├── geometry.py             # Exact Camera Intrinsics & Inverse Perspective Mapping
-│   └── metrics.py              # IoU, Angular Error, and Loss functions
+├── utils/
+│   ├── dataset.py                # UMD dataset (augmentation + intrinsics-aware)
+│   ├── augmentations.py          # joint RGB / mask / normal augmentation
+│   ├── losses.py                 # DiceBCE, smoothness, angular error, IoU
+│   ├── geometry.py               # back-projection and normal computation
+│   └── visualization.py
 │
-├── scripts/                    # Executable pipeline scripts
-│   ├── 01_validate_umd.py      # Dataset inspection and extraction sanity check
-│   ├── 02_train.py             # The main training loop (Handles RGB vs RGB-D testing)
-│   ├── 03_evaluate.py          # Testing the model on unseen UMD tools
-│   └── 04_inference.py         # Pass custom office images through the trained system
+├── scripts/
+│   └── train.py                  # training loop
 │
-├── README.md                   # Project documentation
-└── requirements.txt            # Python dependencies
+├── notebooks/
+│   ├── colab_training.ipynb
+│   ├── local_training.ipynb
+│   └── data_exploration.ipynb
+│
+├── docs/
+│   ├── CHANGELOG.md              # history of architectural changes
+│   └── Project_Definition.md
+│
+├── archive/                      # historical baselines kept for comparison
+│   └── v1/                       # original single-scale ViT + simple decoder
+│
+├── config.py                     # paths, training defaults, camera intrinsics
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## 8. Quick Start
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Place the UMD dataset under data/raw/part-affordance-dataset/tools/
+
+# 3. Train
+python scripts/train.py --epochs 25 --batch_size 8
+```
+
+---
+
+## 9. Roadmap
+
+Items planned for future iterations, ordered by expected impact for the
+robotics-startup use case:
+
+1. **RGB-D variant.** `dataset.py` already exposes the depth tensor via
+   `return_depth=True`; add a parallel depth encoder branch in the decoder and
+   A/B against RGB-only.
+2. **Uncertainty head.** Either MC dropout or an evidential output, so a
+   humanoid can gate execution on prediction confidence.
+3. **Synthetic clutter augmentation.** Depth-aware composition of multiple
+   UMD crops to address cross-object occlusion.
+4. **Multi-resolution test-time inference.** Average masks at 448 and 672 to
+   recover thin sub-patch structures.
+5. **Partial DINOv2 unfreeze.** Fine-tune the last 2–4 ViT blocks at a
+   10× lower learning rate after the decoder converges.
+
+---
+
+## 10. Further Reading
+
+- `docs/CHANGELOG.md` — how the current architecture evolved, with the
+  rationale behind each change and pointers to the archived baseline.
+- `archive/v1/` — original single-scale ViT + simple decoder, preserved for
+  A/B comparison and reproducibility of any earlier results.
