@@ -11,3 +11,4 @@ ipykernel       # Allows Jupyter Notebooks to run inside your Conda env
 torch           # PyTorch core
 torchvision     # PyTorch vision tools (transforms, etc.)
 tqdm            # Progress bars for your training loops
+xformers
