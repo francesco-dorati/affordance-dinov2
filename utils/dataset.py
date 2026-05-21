@@ -104,3 +104,21 @@ class UMDAffordanceDataset(Dataset):
             depth_t = torch.from_numpy(depth_c.astype(np.float32) / 1000.0).unsqueeze(0)
             out['depth'] = depth_t
         return out
+
+
+def instance_split(dataset, seed: int = 42, val_frac: float = 0.2):
+    """Deterministic split by tool name. Returns (train_indices, val_indices).
+
+    Uses a local RandomState so the global numpy RNG is not perturbed. Tools
+    are shuffled once with the given seed; the first (1 - val_frac) fraction
+    by tool name go into the train set, the remainder into val. This is an
+    instance-split: a tool seen at training is NEVER seen at validation.
+    """
+    all_tools = sorted({s[0] for s in dataset.samples})
+    rng = np.random.RandomState(seed)
+    rng.shuffle(all_tools)
+    n_train = int((1 - val_frac) * len(all_tools))
+    train_tools = set(all_tools[:n_train])
+    train_idx = [i for i, s in enumerate(dataset.samples) if s[0] in train_tools]
+    val_idx   = [i for i, s in enumerate(dataset.samples) if s[0] not in train_tools]
+    return train_idx, val_idx

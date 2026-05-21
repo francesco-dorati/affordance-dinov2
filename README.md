@@ -206,7 +206,88 @@ never seen during training. Checkpoints are written to `checkpoints/` (or
 
 ---
 
-## 7. Code Structure
+## 7. Monitoring and Evaluation
+
+Training writes every epoch's metrics to disk so the run is auditable even if
+you lose the terminal output (e.g. when training on a remote machine). The
+checkpoint directory after a run looks like this:
+
+```
+checkpoints/
+├── best.pth            # decoder state_dict at best val loss
+├── last.pth            # full checkpoint for --resume
+├── history.jsonl       # one JSON line per epoch, train + val rows
+└── run_config.json     # the args this run was launched with
+```
+
+### Inspecting an in-flight run
+
+`history.jsonl` is line-buffered and flushed every epoch. From the remote PC:
+
+```bash
+tail -f checkpoints/history.jsonl              # follow live
+tail -n 1 checkpoints/history.jsonl | python -m json.tool   # last record, pretty
+```
+
+### Post-hoc evaluation (`scripts/evaluate.py`)
+
+Loads any checkpoint and writes a detailed JSON report containing:
+
+- IoU at thresholds 0.3, 0.4, 0.5, 0.6, 0.7
+- Mean angular error in degrees
+- Fraction of normal-vector pixels with angular error ≤ 11.25° / 22.5° / 30°
+  (the standard NYUv2 surface-normal bins)
+- Per-tool breakdown of IoU and mean angular error
+
+```bash
+# Evaluate the best checkpoint on the held-out val tools (default)
+python scripts/evaluate.py
+
+# Evaluate the last checkpoint on the entire dataset
+python scripts/evaluate.py --checkpoint checkpoints/last.pth --split all
+```
+
+Report written to `checkpoints/evaluation_<split>.json`.
+
+### Training curves and overfitting check (`scripts/visualize.py`)
+
+Reads `history.jsonl` and produces a 2×2 plot (train vs val loss, IoU,
+angular error, plus train-side component losses) with the best epoch marked.
+A short text summary is printed to stdout and saved next to the PNG.
+
+```bash
+python scripts/visualize.py --history checkpoints/history.jsonl
+```
+
+Outputs:
+
+```
+checkpoints/
+├── training_curves.png
+└── training_summary.txt
+```
+
+The summary includes a heuristic overfitting flag (train loss decreasing
+while val loss flat or rising in the last three epochs) and the "patience":
+how many epochs since val loss last improved. A high patience with a still
+falling train loss is the canonical overfitting signature.
+
+### Qualitative prediction grids
+
+Pass `--checkpoint` and `--n_samples N` to also dump per-sample side-by-side
+PNGs (RGB | GT mask overlay | predicted mask | GT normals | predicted normals)
+for N random val samples:
+
+```bash
+python scripts/visualize.py --history checkpoints/history.jsonl \
+    --checkpoint checkpoints/best.pth --n_samples 8
+```
+
+Outputs land in `checkpoints/samples/`.
+
+---
+
+## 8. Code Structure
 
 ```text
 cv-project/
@@ -220,14 +301,17 @@ cv-project/
 │   └── decoder.py                # multi-scale fusion + RGB skips + logits
 │
 ├── utils/
-│   ├── dataset.py                # UMD dataset (augmentation + intrinsics-aware)
+│   ├── dataset.py                # UMD dataset + instance_split helper
 │   ├── augmentations.py          # joint RGB / mask / normal augmentation
 │   ├── losses.py                 # DiceBCE, smoothness, angular error, IoU
+│   ├── training_logger.py        # JSONL per-epoch metrics logger
 │   ├── geometry.py               # back-projection and normal computation
 │   └── visualization.py
 │
 ├── scripts/
-│   └── train.py                  # training loop
+│   ├── train.py                  # training loop with metrics logging
+│   ├── evaluate.py               # detailed metrics on any checkpoint
+│   └── visualize.py              # training curves + sample prediction grids
 │
 ├── notebooks/
 │   ├── colab_training.ipynb
@@ -248,7 +332,7 @@ cv-project/
 
 ---
 
-## 8. Quick Start
+## 9. Quick Start
 
 ```bash
 # 1. Install dependencies
@@ -258,11 +342,15 @@ pip install -r requirements.txt
 
 # 3. Train
 python scripts/train.py --epochs 25 --batch_size 8
+
+# 4. After (or during) training, inspect the run
+python scripts/visualize.py --history checkpoints/history.jsonl
+python scripts/evaluate.py  --checkpoint checkpoints/best.pth
 ```
 
 ---
 
-## 9. Roadmap
+## 10. Roadmap
 
 Items planned for future iterations, ordered by expected impact for the
 robotics-startup use case:
@@ -281,7 +369,7 @@ robotics-startup use case:
 
 ---
 
-## 10. Further Reading
+## 11. Further Reading
 
 - `docs/CHANGELOG.md` — how the current architecture evolved, with the
   rationale behind each change and pointers to the archived baseline.
