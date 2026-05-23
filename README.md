@@ -371,6 +371,10 @@ robotics-startup use case:
 
 ## 11. Further Reading
 
+- `docs/ARCHITECTURE.md` — beginner-friendly step-by-step explanation of
+  every layer, every tensor shape, and the reasoning behind each design
+  decision. Includes a paper-style diagram (`docs/architecture_diagram.svg`)
+  and an end-to-end shape reference table.
 - `docs/CHANGELOG.md` — how the current architecture evolved, with the
   rationale behind each change and pointers to the archived baseline.
 - `archive/v1/` — original single-scale ViT + simple decoder, preserved for
