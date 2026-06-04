@@ -4,6 +4,9 @@ dataset.py — UMD affordance dataset with:
   - principal-point correction after center crop
   - optional joint augmentation (utils/augmentations.py)
   - optional depth tensor output for an RGB-D variant
+  - MULTI-CLASS affordance mask: returns a (N_AFFORDANCE_CLASSES, H, W)
+    multi-hot tensor, one channel per UMD affordance class. The class order
+    is defined by config.AFFORDANCE_CLASSES.
 
 Returns a dict with keys 'rgb', 'mask', 'normals', 'tool_name'
 (and 'depth' if return_depth=True).
@@ -19,6 +22,7 @@ import torchvision.transforms as transforms
 
 from utils.geometry import compute_normals
 from utils.augmentations import JointTrainTransform
+from config import AFFORDANCE_LABEL_IDS, N_AFFORDANCE_CLASSES
 
 
 class UMDAffordanceDataset(Dataset):
@@ -84,14 +88,24 @@ class UMDAffordanceDataset(Dataset):
         intr = self._shifted_intrinsics(top, left)
         normals_raw, _ = compute_normals(depth_c, **intr)
 
-        # UMD label IDs: 1 = grasp, 7 = wrap-grasp
-        mask = np.isin(labels_c, [1, 7]).astype(np.float32)
+        # Pass the multi-class label image through augmentation as a float32
+        # array; cv2.warpAffine with INTER_NEAREST preserves the discrete
+        # class IDs (0 background, 1..7 affordance classes).
+        label_img = labels_c.astype(np.float32)
 
         if self.augment_fn is not None:
-            rgb_c, mask, normals_raw = self.augment_fn(rgb_c, mask, normals_raw)
+            rgb_c, label_img, normals_raw = self.augment_fn(rgb_c, label_img, normals_raw)
+
+        # Expand to a (N_AFFORDANCE_CLASSES, H, W) multi-hot tensor: one
+        # channel per affordance class, in config.AFFORDANCE_CLASSES order.
+        label_int = label_img.astype(np.int64)
+        masks = np.stack(
+            [(label_int == cid).astype(np.float32) for cid in AFFORDANCE_LABEL_IDS],
+            axis=0,
+        )  # shape: (N_AFFORDANCE_CLASSES, H, W)
 
         rgb_t = self.normalize(self.to_tensor(rgb_c))
-        mask_t = torch.from_numpy(np.ascontiguousarray(mask)).unsqueeze(0).float()
+        mask_t = torch.from_numpy(np.ascontiguousarray(masks)).float()
         normals_t = torch.from_numpy(np.ascontiguousarray(normals_raw)).permute(2, 0, 1).float()
 
         out = {

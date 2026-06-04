@@ -35,13 +35,28 @@ network to produce a deterministic robotic approach packet.
 
 ### Global outputs (action layer)
 
-- **2D affordance mask:** 448 × 448 × 1 high-resolution segmentation of the
-  actionable region.
+- **Multi-class affordance mask:** 448 × 448 × 7 high-resolution segmentation,
+  one independent sigmoid channel per UMD affordance class (multi-label, not
+  multi-class softmax — a pixel may belong to several affordances at once).
+  Channel order is defined by `config.AFFORDANCE_CLASSES`:
+
+  | Idx | Class | Meaning for a humanoid |
+  |---|---|---|
+  | 0 | `grasp`       | Region you grip to pick the object up (handles, shafts). |
+  | 1 | `cut`         | Sharp edge that severs material (knife / scissor blades). |
+  | 2 | `scoop`       | Concave surface that lifts loose material (spoon bowl). |
+  | 3 | `contain`     | Interior cavity that holds material (cup / mug / bowl interior). |
+  | 4 | `pound`       | Heavy striking face that delivers impact (mallet head). |
+  | 5 | `support`     | Broad flat region that supports another object (turner blade, trowel face). |
+  | 6 | `wrap-grasp`  | Graspable region wrapped by the hand (mug handle, cylindrical grips). |
+
 - **Dense surface normal map:** 448 × 448 × 3 unit-vector field representing
   surface orientation (`N_x, N_y, N_z`) for a collision-free approach.
 - **3D approach centroid:** the (X, Y, Z) coordinate of the target, derived
-  from the centroid of the predicted mask and its corresponding depth value,
-  back-projected through the calibrated camera intrinsics.
+  from the centroid of the selected affordance channel and its corresponding
+  depth value, back-projected through the calibrated camera intrinsics. The
+  caller picks which channel to use based on the intended task ("grasp this",
+  "pour into this", "cut with this").
 
 ---
 
@@ -103,8 +118,9 @@ per deployment without touching code.
 
 **Primary dataset:** UMD Part Affordance Dataset. Real-world RGB-D captures
 from a Kinect sensor, 105 kitchen, workshop, and gardening tools, labeled
-with verb-based affordance categories (we use class 1 = grasp and 7 =
-wrap-grasp as the positive mask).
+with seven per-pixel affordance classes (`grasp`, `cut`, `scoop`, `contain`,
+`pound`, `support`, `wrap-grasp`). The model is supervised on all seven
+classes simultaneously; each class is an independent binary prediction.
 
 **In-the-wild test set:** custom captures from a modern depth camera in an
 office, containing completely novel objects under varied lighting, used to
@@ -114,10 +130,13 @@ evaluate sim-to-real generalization qualitatively.
 
 **Evaluation metrics:**
 
-- **IoU** (intersection over union) at threshold 0.5 for 2D mask accuracy.
+- **Mean-IoU** at threshold 0.5: per-class binary IoU averaged across the
+  seven affordance channels. Headline number for the mask head.
+- **Per-class IoU**: full breakdown so weak classes (e.g. `support`, `pound`)
+  are not hidden behind strong ones (`grasp`, `wrap-grasp`).
 - **Mean angular error in degrees** (computed via `acos(cosine_similarity)`)
-  for surface normal accuracy over the GT mask region — more interpretable
-  than raw cosine loss.
+  for surface normal accuracy, evaluated over the union of all annotated
+  affordance pixels per sample.
 
 ---
 
@@ -151,11 +170,14 @@ L_total = DiceBCELoss(mask_logits, gt_mask)
 
 with defaults `w_normal = 5.0` and `w_smooth = 0.5`.
 
-- **`DiceBCELoss`** combines `BCEWithLogitsLoss` with soft Dice. Dice is
-  important because affordance pixels are heavily outnumbered by background.
-- **`masked_cosine_loss`** averages the cosine distance only over GT
-  affordance pixels, so the loss focuses on the regions a robot will actually
-  use.
+- **`DiceBCELoss`** combines `BCEWithLogitsLoss` (element-wise across the 7
+  affordance channels) with per-channel soft Dice averaged over both batch
+  and channels. Per-channel Dice keeps rare classes (e.g. `pound`) from being
+  washed out by abundant ones (`grasp`). Dice is important because affordance
+  pixels are heavily outnumbered by background.
+- **`masked_cosine_loss`** averages the cosine distance over the union of all
+  annotated affordance pixels — wherever any of the 7 classes is active, the
+  predicted normal is supervised.
 - **`edge_aware_normal_smoothness`** is the classic
   `exp(-|grad RGB|)`-weighted smoothness term: encourages normals to be
   smooth inside flat regions while allowing breaks where the RGB image has
@@ -167,8 +189,11 @@ with defaults `w_normal = 5.0` and `w_smooth = 0.5`.
 
 ### Phase 1 — Data engineering
 
-- **Label extraction:** load `.mat` label files, isolate grasp affordances
-  (classes 1 and 7) into binary target masks.
+- **Label extraction:** load `.mat` label files containing per-pixel class
+  IDs 0–7. The dataset returns a (7, H, W) multi-hot tensor (one channel per
+  affordance class, in `config.AFFORDANCE_CLASSES` order). Augmentation runs
+  on the raw label image first (with `INTER_NEAREST` to preserve class IDs);
+  the multi-hot expansion happens afterwards.
 - **On-the-fly normal generation:** back-project depth into 3D via the camera
   intrinsics, then compute normals from cross products of finite-difference
   tangents (`utils/geometry.compute_normals`). The dataset shifts the
@@ -233,11 +258,13 @@ tail -n 1 checkpoints/history.jsonl | python -m json.tool   # last record, prett
 
 Loads any checkpoint and writes a detailed JSON report containing:
 
-- IoU at thresholds 0.3, 0.4, 0.5, 0.6, 0.7
-- Mean angular error in degrees
+- Mean-IoU at thresholds 0.3, 0.4, 0.5, 0.6, 0.7 (per-class IoU averaged
+  across the 7 affordance channels)
+- Per-affordance-class IoU at each threshold (`per_class_overall`)
+- Mean angular error in degrees over the union of GT affordance pixels
 - Fraction of normal-vector pixels with angular error ≤ 11.25° / 22.5° / 30°
   (the standard NYUv2 surface-normal bins)
-- Per-tool breakdown of IoU and mean angular error
+- Per-tool breakdown of mean-IoU, per-class IoU at 0.5, and mean angular error
 
 ```bash
 # Evaluate the best checkpoint on the held-out val tools (default)
@@ -274,9 +301,12 @@ falling train loss is the canonical overfitting signature.
 
 ### Qualitative prediction grids
 
-Pass `--checkpoint` and `--n_samples N` to also dump per-sample side-by-side
-PNGs (RGB | GT mask overlay | predicted mask | GT normals | predicted normals)
-for N random val samples:
+Pass `--checkpoint` and `--n_samples N` to also dump per-sample multi-panel
+PNGs for N random val samples. Each PNG has three rows: a summary row (RGB,
+GT vs predicted multi-class colored overlay, GT vs predicted normals); a row
+of per-class GT heatmaps; and a row of per-class predicted heatmaps. This
+makes it easy to spot which affordance channels are working and which are
+not.
 
 ```bash
 python scripts/visualize.py --history checkpoints/history.jsonl \

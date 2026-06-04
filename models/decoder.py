@@ -104,11 +104,17 @@ class MultiTaskDecoder(nn.Module):
                    each [B, embed_dim, 32, 32].
         rgb:       [B, 3, 448, 448] (the SAME normalized RGB you fed the ViT)
     Outputs:
-        mask_logits: [B, 1, 448, 448]  (raw — do NOT apply sigmoid here)
-        normal_pred: [B, 3, 448, 448]  (unit vectors)
+        mask_logits: [B, n_classes, 448, 448]  (raw — do NOT apply sigmoid here)
+        normal_pred: [B, 3, 448, 448]          (unit vectors)
+
+    The mask head is MULTI-LABEL: each of `n_classes` channels carries an
+    independent sigmoid logit for one UMD affordance class. Pair with a
+    per-channel BCE + Dice loss.
     """
-    def __init__(self, embed_dim: int = 384, n_vit_scales: int = 4):
+    def __init__(self, embed_dim: int = 384, n_vit_scales: int = 4,
+                 n_classes: int = 7):
         super().__init__()
+        self.n_classes = n_classes
         self.rgb_stem = RGBStem()
 
         # --- Multi-scale ViT fusion at 32x32 ---
@@ -128,7 +134,7 @@ class MultiTaskDecoder(nn.Module):
         self.up4 = FusionUp(in_ch=64,  skip_ch=32,  out_ch=32)
 
         # --- Heads ---
-        self.mask_head = nn.Conv2d(32, 1, 1)  # logits
+        self.mask_head = nn.Conv2d(32, n_classes, 1)   # per-class logits
         self.normal_head = nn.Sequential(
             nn.Conv2d(32, 32, 3, padding=1, bias=False),
             nn.BatchNorm2d(32), nn.ReLU(inplace=True),
@@ -150,7 +156,7 @@ class MultiTaskDecoder(nn.Module):
         x = self.up3(x, s1)   # 224
         x = self.up4(x, s0)   # 448
 
-        mask_logits = self.mask_head(x)                # [B, 1, 448, 448]
+        mask_logits = self.mask_head(x)                # [B, n_classes, 448, 448]
         normal_raw  = self.normal_head(x)              # [B, 3, 448, 448]
         normal_pred = F.normalize(normal_raw, p=2, dim=1)
         return mask_logits, normal_pred

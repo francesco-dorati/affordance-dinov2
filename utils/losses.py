@@ -1,17 +1,22 @@
 """
-losses.py — Loss functions and metrics for the v2 training pipeline.
+losses.py — Loss functions and metrics for the multi-class affordance pipeline.
 
 WHY:
-  - Your old code does sigmoid + BCELoss which is numerically unstable.
-    DiceBCELoss here uses BCEWithLogitsLoss (works on RAW logits) + soft Dice.
-    Dice is critical because affordance masks are class-imbalanced (most pixels
-    are background).
-  - masked_cosine_loss is your original normals loss, restated cleanly.
+  - DiceBCELoss uses BCEWithLogitsLoss (works on RAW logits) + per-channel
+    soft Dice. Multi-label, not multi-class softmax: each of the C affordance
+    channels is an independent binary problem. Per-channel Dice means that
+    channels with very few positive pixels (rare classes like `pound`) still
+    contribute meaningfully to the loss instead of being washed out by the
+    dominant `grasp` channel.
+  - masked_cosine_loss / angle_error_degrees evaluate normals over the UNION
+    of all affordance channels — wherever any annotated affordance pixel sits,
+    we want the predicted normal to be correct.
   - edge_aware_normal_smoothness penalizes normal jitter inside flat regions
-    while still allowing breaks where the RGB image has edges. This is the
-    standard self-supervised smoothness term (Godard et al., Monodepth).
-  - angle_error_degrees gives you a human-readable metric per epoch — much more
-    interpretable than 1 - cosine.
+    while still allowing breaks where the RGB image has edges (Godard et al.,
+    Monodepth).
+  - `iou` returns the per-class binary IoU averaged across channels (mean-IoU,
+    the multi-label headline metric). `iou_per_class` returns the full vector
+    for diagnostics.
 
 REVERT: delete this file.
 """
@@ -22,10 +27,25 @@ import torch.nn.functional as F
 
 
 # =====================================================================
+# Helpers
+# =====================================================================
+def _active_from_multihot(gt_mask: torch.Tensor) -> torch.Tensor:
+    """Reduce a multi-label mask [B, C, H, W] to a per-pixel activity map
+    [B, H, W] that is True wherever ANY affordance channel is active."""
+    return gt_mask.sum(dim=1) > 0
+
+
+# =====================================================================
 # 1. Mask loss
 # =====================================================================
 class DiceBCELoss(nn.Module):
-    """BCE-with-logits + soft Dice. Pass RAW logits, not probabilities."""
+    """BCE-with-logits + per-channel soft Dice. Pass RAW logits.
+
+    Inputs are [B, C, H, W] with C = number of affordance classes.
+    BCE is element-wise so each channel contributes equally per pixel.
+    Dice is computed per (sample, channel) on the spatial dims, then averaged
+    over both batch and channels so each affordance class carries equal weight.
+    """
     def __init__(self, bce_weight: float = 1.0, dice_weight: float = 1.0,
                  pos_weight: torch.Tensor = None):
         super().__init__()
@@ -36,10 +56,10 @@ class DiceBCELoss(nn.Module):
     def forward(self, logits: torch.Tensor, target: torch.Tensor):
         bce = self.bce(logits, target)
         probs = torch.sigmoid(logits)
-        dims = (1, 2, 3)
-        inter = (probs * target).sum(dim=dims)
-        union = probs.sum(dim=dims) + target.sum(dim=dims)
-        dice = 1 - (2 * inter + 1) / (union + 1)
+        dims = (2, 3)  # spatial only — keep channels separate
+        inter = (probs * target).sum(dim=dims)            # [B, C]
+        union = probs.sum(dim=dims) + target.sum(dim=dims)  # [B, C]
+        dice = 1 - (2 * inter + 1) / (union + 1)            # [B, C]
         return self.bce_w * bce + self.dice_w * dice.mean()
 
 
@@ -47,12 +67,12 @@ class DiceBCELoss(nn.Module):
 # 2. Normal losses
 # =====================================================================
 def masked_cosine_loss(pred_normals, gt_normals, gt_mask):
-    """Cosine-distance loss, averaged over GT mask pixels only."""
+    """Cosine-distance loss, averaged over the UNION of all affordance pixels."""
     pred = F.normalize(pred_normals, p=2, dim=1)
     gt   = F.normalize(gt_normals,   p=2, dim=1)
     sim  = F.cosine_similarity(pred, gt, dim=1)        # [B, H, W]
     loss_map = 1 - sim
-    active = (gt_mask > 0).squeeze(1)
+    active = _active_from_multihot(gt_mask)
     if active.sum() == 0:
         return torch.tensor(0.0, device=pred_normals.device, requires_grad=True)
     return loss_map[active].mean()
@@ -79,23 +99,51 @@ def edge_aware_normal_smoothness(normals, rgb, edge_sharpness: float = 10.0):
 
 
 # =====================================================================
-# 3. Metric
+# 3. Metrics
 # =====================================================================
 def angle_error_degrees(pred_normals, gt_normals, gt_mask):
-    """Mean angular error in degrees over GT mask pixels."""
+    """Mean angular error in degrees over the union of GT affordance pixels."""
     pred = F.normalize(pred_normals, p=2, dim=1)
     gt   = F.normalize(gt_normals,   p=2, dim=1)
     cos = (pred * gt).sum(dim=1).clamp(-1 + 1e-6, 1 - 1e-6)
     deg = torch.acos(cos) * (180.0 / 3.141592653589793)
-    active = (gt_mask > 0).squeeze(1)
+    active = _active_from_multihot(gt_mask)
     if active.sum() == 0:
         return torch.tensor(float('nan'))
     return deg[active].mean()
 
 
 def iou(logits, target, thresh: float = 0.5):
-    """Binary IoU (predicted sigmoid > thresh vs binary target)."""
+    """Mean-IoU: per-class binary IoU averaged across channels.
+
+    Logits and target are [B, C, H, W]. Returns a single scalar — the
+    headline mask metric for training-loop logging.
+    """
+    per_class = iou_per_class(logits, target, thresh=thresh)
+    # Drop classes with no positive pixels anywhere in the batch (denominator
+    # would be 0). This avoids spuriously perfect IoU=0 on absent classes.
+    valid = [v for v in per_class if v is not None]
+    if not valid:
+        return 0.0
+    return float(sum(valid) / len(valid))
+
+
+def iou_per_class(logits, target, thresh: float = 0.5):
+    """Returns a list of per-class IoU floats (or None for absent classes).
+
+    A class is "absent" when both prediction and target have zero positive
+    pixels across the entire batch — IoU is undefined there.
+    """
     pred = (torch.sigmoid(logits) > thresh).float()
-    inter = (pred * target).sum()
-    union = pred.sum() + target.sum() - inter
-    return (inter / (union + 1e-6)).item()
+    out = []
+    C = pred.shape[1]
+    for c in range(C):
+        p = pred[:, c]
+        t = target[:, c]
+        inter = (p * t).sum()
+        union = p.sum() + t.sum() - inter
+        if union.item() == 0:
+            out.append(None)
+        else:
+            out.append((inter / (union + 1e-6)).item())
+    return out

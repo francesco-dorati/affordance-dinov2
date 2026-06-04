@@ -1,0 +1,8 @@
+Epochs completed   : 25
+Best val epoch     : 24    (val loss 0.7158)
+Last val loss      : 0.7430
+Last val IoU       : 0.7051
+Last val angle err : 22.79°
+Train-Val gap      : +0.2926   (val - train at last epoch)
+Patience           : 1 epochs since best val
+Overfitting flag   : YES — train improving, val flat/worse

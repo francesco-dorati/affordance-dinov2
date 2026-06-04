@@ -85,7 +85,10 @@ class JointTrainTransform:
         """
         Args:
             rgb:     HxWx3 uint8
-            mask:    HxW   float32 (0/1)
+            mask:    HxW   float32. For multi-class affordances this is the raw
+                     per-pixel class-ID image (values 0=background, 1..7 for the
+                     seven UMD affordance classes). cv2.warpAffine with
+                     INTER_NEAREST preserves the discrete class IDs.
             normals: HxWx3 float32 (unit vectors, 0 in invalid regions)
         Returns:
             same shapes/dtypes after augmentation.

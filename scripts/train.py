@@ -36,7 +36,7 @@ from torch.utils.data import DataLoader, Subset
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
-from config import RAW_TOOLS, TRAIN_INTRINSICS
+from config import RAW_TOOLS, TRAIN_INTRINSICS, AFFORDANCE_CLASSES, N_AFFORDANCE_CLASSES
 from models.backbone import DINOv2Backbone
 from models.decoder import MultiTaskDecoder
 from utils.dataset import UMDAffordanceDataset, instance_split
@@ -46,6 +46,7 @@ from utils.losses import (
     edge_aware_normal_smoothness,
     angle_error_degrees,
     iou,
+    iou_per_class,
 )
 from utils.training_logger import JSONLLogger
 
@@ -74,6 +75,10 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
     decoder.eval()
     sums = dict(loss=0.0, loss_mask=0.0, loss_normal=0.0,
                 iou=0.0, angle_deg=0.0, n=0)
+    # Per-class IoU: sum + count separately so absent classes (None) don't
+    # poison the average for a given epoch.
+    iou_c_sum = [0.0] * N_AFFORDANCE_CLASSES
+    iou_c_n   = [0]   * N_AFFORDANCE_CLASSES
     with torch.no_grad():
         for batch in loader:
             rgb        = batch['rgb'].to(device)
@@ -90,12 +95,21 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
             sums['loss_mask']   += l_mask.item()
             sums['loss_normal'] += l_norm.item()
             sums['iou']         += iou(mask_logits, gt_mask)
+            for c, v in enumerate(iou_per_class(mask_logits, gt_mask)):
+                if v is not None:
+                    iou_c_sum[c] += v
+                    iou_c_n[c]   += 1
             ang = angle_error_degrees(pred_normals, gt_normals, gt_mask)
             if not torch.isnan(ang):
                 sums['angle_deg'] += ang.item()
             sums['n'] += 1
     n = max(sums['n'], 1)
-    return {k: (v / n if k != 'n' else v) for k, v in sums.items()}
+    out = {k: (v / n if k != 'n' else v) for k, v in sums.items()}
+    out['iou_per_class'] = [
+        (iou_c_sum[c] / iou_c_n[c]) if iou_c_n[c] > 0 else None
+        for c in range(N_AFFORDANCE_CLASSES)
+    ]
+    return out
 
 
 # =====================================================================
@@ -111,8 +125,13 @@ def main():
     print(f"Device: {DEVICE} | Checkpoints: {CKPT_DIR}")
 
     # Persist the run config so we know what produced this checkpoint dir.
+    # Record the affordance class order so downstream tools (evaluate.py,
+    # visualize.py) interpret the 7 mask channels correctly.
+    run_cfg = dict(vars(args))
+    run_cfg["affordance_classes"] = list(AFFORDANCE_CLASSES)
+    run_cfg["n_affordance_classes"] = N_AFFORDANCE_CLASSES
     with open(CKPT_DIR / "run_config.json", "w") as f:
-        json.dump(vars(args), f, indent=2)
+        json.dump(run_cfg, f, indent=2)
 
     # ---- Data ----
     train_ds = UMDAffordanceDataset(
@@ -134,7 +153,8 @@ def main():
 
     # ---- Model ----
     backbone = DINOv2Backbone(freeze=True).to(DEVICE)
-    decoder  = MultiTaskDecoder(embed_dim=backbone.embed_dim, n_vit_scales=4).to(DEVICE)
+    decoder  = MultiTaskDecoder(embed_dim=backbone.embed_dim, n_vit_scales=4,
+                                n_classes=N_AFFORDANCE_CLASSES).to(DEVICE)
 
     optimizer = optim.AdamW(decoder.parameters(), lr=args.lr, weight_decay=1e-4)
     mask_loss_fn = DiceBCELoss()
@@ -164,6 +184,8 @@ def main():
             t0 = time.time()
             sums = dict(loss=0.0, loss_mask=0.0, loss_normal=0.0,
                         loss_smooth=0.0, iou=0.0, angle_deg=0.0, n=0)
+            iou_c_sum_tr = [0.0] * N_AFFORDANCE_CLASSES
+            iou_c_n_tr   = [0]   * N_AFFORDANCE_CLASSES
             pbar = tqdm(train_loader, desc=f"E{epoch+1}/{args.epochs} TRAIN")
             for batch in pbar:
                 rgb        = batch['rgb'].to(DEVICE)
@@ -189,6 +211,10 @@ def main():
                 sums['loss_normal'] += l_norm.item()
                 sums['loss_smooth'] += l_smooth.item()
                 sums['iou']         += iou(mask_logits.detach(), gt_mask)
+                for c, v in enumerate(iou_per_class(mask_logits.detach(), gt_mask)):
+                    if v is not None:
+                        iou_c_sum_tr[c] += v
+                        iou_c_n_tr[c]   += 1
                 with torch.no_grad():
                     ang = angle_error_degrees(pred_normals, gt_normals, gt_mask)
                 if not torch.isnan(ang):
@@ -202,12 +228,17 @@ def main():
             train_dur = time.time() - t0
             n = max(sums['n'], 1)
             train_metrics = {k: (v / n if k != 'n' else v) for k, v in sums.items()}
+            train_iou_per_class = [
+                (iou_c_sum_tr[c] / iou_c_n_tr[c]) if iou_c_n_tr[c] > 0 else None
+                for c in range(N_AFFORDANCE_CLASSES)
+            ]
             logger.log(epoch=epoch + 1, phase="train",
                        loss=train_metrics['loss'],
                        loss_mask=train_metrics['loss_mask'],
                        loss_normal=train_metrics['loss_normal'],
                        loss_smooth=train_metrics['loss_smooth'],
                        iou=train_metrics['iou'],
+                       iou_per_class=train_iou_per_class,
                        angle_deg=train_metrics['angle_deg'],
                        lr=optimizer.param_groups[0]['lr'],
                        duration_s=train_dur,
@@ -223,6 +254,7 @@ def main():
                        loss_mask=val_metrics['loss_mask'],
                        loss_normal=val_metrics['loss_normal'],
                        iou=val_metrics['iou'],
+                       iou_per_class=val_metrics['iou_per_class'],
                        angle_deg=val_metrics['angle_deg'],
                        duration_s=val_dur,
                        n_batches=val_metrics['n'])

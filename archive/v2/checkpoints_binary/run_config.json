@@ -1,0 +1,10 @@
+{
+  "resume": true,
+  "use_drive": false,
+  "epochs": 25,
+  "batch_size": 8,
+  "lr": 0.0001,
+  "w_normal": 5.0,
+  "w_smooth": 0.5,
+  "no_augment": false
+}

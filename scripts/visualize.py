@@ -4,14 +4,15 @@ visualize.py — Plot training history and optionally dump sample predictions.
 WHAT YOU GET:
   1. training_curves.png  — 2x2 grid:
        (a) Train vs Val loss with best-epoch marker
-       (b) Train vs Val IoU
+       (b) Train vs Val mean-IoU (averaged across the 7 affordance classes)
        (c) Train vs Val angular error (degrees)
        (d) Component losses (mask, normal, smoothness) on the train side
      A short text summary is printed and also saved next to the PNG.
 
   2. (optional, with --checkpoint) samples/000_<tool>.png ... — one PNG per
-     sample with RGB + GT mask overlay + predicted mask + GT normals + predicted
-     normals side by side, for quick visual sanity-checking of the predictions.
+     sample showing RGB, GT vs predicted multi-class affordance overlay (one
+     color per UMD class), GT vs predicted normals, and one row of per-class
+     predicted heatmaps — for visual sanity-checking of the multi-class model.
 
 WHAT TO LOOK FOR — OVERFITTING:
   - Healthy training: train and val curves stay close; both keep improving.
@@ -189,12 +190,50 @@ def plot_history(records, out_path):
 # =====================================================================
 # 4. (Optional) sample prediction grids
 # =====================================================================
+# Distinct colors for the 7 UMD affordance classes (+ index 0 = background).
+# Stable across the codebase so notebook and script visualizations match.
+_AFFORDANCE_PALETTE = [
+    "#000000",  # 0 background
+    "#e41a1c",  # 1 grasp        — red
+    "#377eb8",  # 2 cut          — blue
+    "#4daf4a",  # 3 scoop        — green
+    "#984ea3",  # 4 contain      — purple
+    "#ff7f00",  # 5 pound        — orange
+    "#ffff33",  # 6 support      — yellow
+    "#a65628",  # 7 wrap-grasp   — brown
+]
+
+
+def _multihot_to_classmap(multihot: np.ndarray) -> np.ndarray:
+    """(C, H, W) multi-hot → (H, W) class indices (0=background, 1..C=class).
+
+    Argmax over channels gives the dominant class; pixels where ALL channels
+    are zero stay at background (0). Used for the GT visualisation.
+    """
+    has_any = multihot.sum(axis=0) > 0
+    argmax = multihot.argmax(axis=0) + 1  # shift so channel 0 → class 1
+    out = np.where(has_any, argmax, 0).astype(np.int32)
+    return out
+
+
+def _probs_to_classmap(probs: np.ndarray, thresh: float = 0.5) -> np.ndarray:
+    """(C, H, W) probabilities → (H, W) class indices using argmax + threshold."""
+    has_any = probs.max(axis=0) > thresh
+    argmax = probs.argmax(axis=0) + 1
+    out = np.where(has_any, argmax, 0).astype(np.int32)
+    return out
+
+
 def dump_samples(checkpoint_path, output_dir, n_samples, seed):
     """Load model, pick n_samples random val items, save side-by-side grids."""
     import torch
+    import matplotlib.colors as mcolors
     from torch.utils.data import Subset
 
-    from config import RAW_TOOLS, TRAIN_INTRINSICS
+    from config import (
+        RAW_TOOLS, TRAIN_INTRINSICS,
+        AFFORDANCE_CLASSES, N_AFFORDANCE_CLASSES,
+    )
     from models.backbone import DINOv2Backbone
     from models.decoder import MultiTaskDecoder
     from utils.dataset import UMDAffordanceDataset, instance_split
@@ -208,7 +247,8 @@ def dump_samples(checkpoint_path, output_dir, n_samples, seed):
     picks = rng.sample(val_idx, k=min(n_samples, len(val_idx)))
 
     backbone = DINOv2Backbone(freeze=True).to(DEVICE).eval()
-    decoder  = MultiTaskDecoder(embed_dim=backbone.embed_dim, n_vit_scales=4).to(DEVICE)
+    decoder  = MultiTaskDecoder(embed_dim=backbone.embed_dim, n_vit_scales=4,
+                                n_classes=N_AFFORDANCE_CLASSES).to(DEVICE)
     state = torch.load(checkpoint_path, map_location=DEVICE)
     if isinstance(state, dict) and 'model' in state:
         state = state['model']
@@ -219,6 +259,11 @@ def dump_samples(checkpoint_path, output_dir, n_samples, seed):
     mean = np.array([0.485, 0.456, 0.406])
     std  = np.array([0.229, 0.224, 0.225])
 
+    cmap = mcolors.ListedColormap(_AFFORDANCE_PALETTE)
+    norm_cmap = mcolors.BoundaryNorm(
+        boundaries=np.arange(-0.5, len(_AFFORDANCE_PALETTE) + 0.5), ncolors=cmap.N
+    )
+
     samples_dir = Path(output_dir) / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)
 
@@ -226,14 +271,14 @@ def dump_samples(checkpoint_path, output_dir, n_samples, seed):
         for i, idx in enumerate(picks):
             item = ds[idx]
             rgb = item['rgb'].unsqueeze(0).to(DEVICE)
-            gt_mask    = item['mask']
+            gt_mask    = item['mask'].cpu().numpy()          # (C, H, W)
             gt_normals = item['normals']
             tool = item['tool_name']
 
             vit_feats = backbone(rgb)
             mask_logits, pred_normals = decoder(vit_feats, rgb)
-            pred_prob   = torch.sigmoid(mask_logits)[0, 0].cpu().numpy()
-            pred_norm   = pred_normals[0].cpu().numpy().transpose(1, 2, 0)
+            pred_prob = torch.sigmoid(mask_logits)[0].cpu().numpy()   # (C, H, W)
+            pred_norm = pred_normals[0].cpu().numpy().transpose(1, 2, 0)
 
             rgb_np = rgb[0].cpu().numpy().transpose(1, 2, 0)
             rgb_np = (rgb_np * std + mean).clip(0, 1)
@@ -242,17 +287,42 @@ def dump_samples(checkpoint_path, output_dir, n_samples, seed):
             gt_norm_vis   = ((gt_norm_np  + 1) / 2).clip(0, 1)
             pred_norm_vis = ((pred_norm   + 1) / 2).clip(0, 1)
 
-            fig, axes = plt.subplots(1, 5, figsize=(20, 4))
-            axes[0].imshow(rgb_np);                                  axes[0].set_title('RGB')
-            axes[1].imshow(rgb_np);
-            axes[1].imshow(gt_mask[0].numpy(), alpha=0.45, cmap='Reds')
-            axes[1].set_title('GT mask overlay')
-            axes[2].imshow(pred_prob, cmap='Reds', vmin=0, vmax=1);  axes[2].set_title('Pred mask (prob)')
-            axes[3].imshow(gt_norm_vis);                             axes[3].set_title('GT normals')
-            axes[4].imshow(pred_norm_vis);                           axes[4].set_title('Pred normals')
-            for ax in axes:
-                ax.axis('off')
-            fig.suptitle(f"{i:03d}  tool={tool}", fontsize=11)
+            gt_cls   = _multihot_to_classmap(gt_mask)
+            pred_cls = _probs_to_classmap(pred_prob, thresh=0.5)
+
+            # 3-row figure: row 0 summary (5 panels), row 1 per-class GT (7),
+            # row 2 per-class predicted (7).
+            fig, axes = plt.subplots(3, 7, figsize=(22, 10))
+
+            # Row 0: hide unused columns
+            for c in range(5, 7):
+                axes[0, c].axis('off')
+
+            axes[0, 0].imshow(rgb_np);                                 axes[0, 0].set_title('RGB')
+            axes[0, 1].imshow(rgb_np)
+            axes[0, 1].imshow(gt_cls, cmap=cmap, norm=norm_cmap, alpha=0.55)
+            axes[0, 1].set_title('GT affordances')
+            axes[0, 2].imshow(rgb_np)
+            axes[0, 2].imshow(pred_cls, cmap=cmap, norm=norm_cmap, alpha=0.55)
+            axes[0, 2].set_title('Pred affordances')
+            axes[0, 3].imshow(gt_norm_vis);                            axes[0, 3].set_title('GT normals')
+            axes[0, 4].imshow(pred_norm_vis);                          axes[0, 4].set_title('Pred normals')
+            for c in range(5):
+                axes[0, c].axis('off')
+
+            # Row 1: per-class GT heatmaps
+            for c in range(N_AFFORDANCE_CLASSES):
+                axes[1, c].imshow(gt_mask[c], cmap='Reds', vmin=0, vmax=1)
+                axes[1, c].set_title(f'GT {AFFORDANCE_CLASSES[c]}', fontsize=9)
+                axes[1, c].axis('off')
+
+            # Row 2: per-class predicted heatmaps
+            for c in range(N_AFFORDANCE_CLASSES):
+                axes[2, c].imshow(pred_prob[c], cmap='Reds', vmin=0, vmax=1)
+                axes[2, c].set_title(f'Pred {AFFORDANCE_CLASSES[c]}', fontsize=9)
+                axes[2, c].axis('off')
+
+            fig.suptitle(f"{i:03d}  tool={tool}", fontsize=12)
             fig.tight_layout()
             fig.savefig(samples_dir / f"{i:03d}_{tool}.png", dpi=110,
                         bbox_inches='tight')

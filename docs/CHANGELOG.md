@@ -11,7 +11,86 @@ reference.
 
 ---
 
-## Current architecture — multi-scale fusion + RGB skip connections
+## Current architecture — multi-class (7-channel) affordance head
+
+### Motivation
+
+The previous mask head produced a single binary channel built from UMD class
+IDs 1 (`grasp`) and 7 (`wrap-grasp`) only. Diagnostic inspection of the
+data exploration notebook revealed that several tool families
+(`bowl_*`, `turner_*`, `scoop_*`) have most or all of their affordance in
+classes that were excluded from supervision: bowls only have `contain` (class
+4), turners primarily `support` (class 6), scoops `scoop` (class 3). The
+post-hoc evaluation IoU=0.0 on bowls was therefore an honest reflection of
+the supervision target, not a model failure. Collapsing seven semantic
+affordances into one "where do I touch this" binary mask also discards the
+information a humanoid actually needs: a robot reasoning about "cut the
+apple" needs to distinguish the blade from the handle, not just locate the
+tool.
+
+### Changes summary
+
+| Aspect | Previous (binary) | Current (multi-class) |
+|---|---|---|
+| Mask head output channels | 1 (sigmoid binary) | 7 (sigmoid multi-label, one per affordance) |
+| Supervision target | union of class IDs 1 + 7 | per-pixel multi-hot over class IDs 1–7 |
+| Tool families with any supervision | knives, mugs, cups, trowels, scissors, spoons, mallets (subset) | all 21 UMD tool families |
+| Mask loss | BCEWithLogitsLoss + soft Dice (single channel) | BCEWithLogitsLoss (element-wise) + per-channel Dice averaged over channels |
+| Normals active mask | `gt_mask > 0` | `gt_mask.sum(channel) > 0` (union over affordances) |
+| `iou` metric | binary IoU on a single channel | mean-IoU: per-class binary IoU averaged across the 7 channels |
+| `iou_per_class` | n/a | per-channel IoU vector (None for absent classes) |
+| Per-epoch logging | `iou`, `angle_deg` | `iou`, `iou_per_class`, `angle_deg` |
+| Evaluator report | overall IoU + per-tool IoU + angle | overall + `per_class_overall` + per-tool `iou@0.5_per_class` |
+| Visualization sample | 1×5 row (RGB / GT / Pred / GT-N / Pred-N) | 3×7 grid (summary row + per-class GT row + per-class Pred row) |
+| `config.AFFORDANCE_CLASSES` | n/a | canonical 7-tuple defining the channel order |
+
+### File layout consequences
+
+No new files. Edits:
+
+| File | What changed |
+|---|---|
+| `config.py` | Added `AFFORDANCE_CLASSES`, `N_AFFORDANCE_CLASSES`, `AFFORDANCE_LABEL_IDS`. |
+| `utils/dataset.py` | Builds a (7, H, W) multi-hot mask from the raw `_label.mat` class IDs. Augmentation runs on the raw label image first; multi-hot expansion happens after. |
+| `models/decoder.py` | `MultiTaskDecoder` accepts `n_classes` (default 7); the mask head's final 1×1 conv outputs `n_classes` channels. |
+| `utils/losses.py` | `DiceBCELoss` computes per-channel Dice on spatial dims and means over batch+channels. `masked_cosine_loss` and `angle_error_degrees` use a union-of-channels active mask. New `iou_per_class` helper; `iou` is now mean-IoU. |
+| `scripts/train.py` | Logs per-class IoU each epoch in `history.jsonl`. Persists `affordance_classes` in `run_config.json`. |
+| `scripts/evaluate.py` | `batch_iou_per_class` replaces `batch_iou`; report contains `per_class_overall` and per-tool `iou@0.5_per_class`. |
+| `scripts/visualize.py` | Sample dump renders 3 rows: summary, per-class GT, per-class predicted heatmaps. Uses a stable 8-color palette per UMD class. |
+
+### API consequences (breaking)
+
+1. **Dataset mask shape.** `batch['mask']` is now `[B, 7, H, W]` (was
+   `[B, 1, H, W]`). Anything indexing channel 0 as "the" mask must change.
+
+2. **Decoder output shape.** `mask_logits` is now `[B, 7, H, W]`. Inference
+   code that flattened over the channel dim still works because everything
+   downstream is broadcast over channels. Code that did `mask_logits[:, 0]`
+   to recover the binary mask now needs to argmax + threshold or pick a
+   specific affordance channel by index from `config.AFFORDANCE_CLASSES`.
+
+3. **Checkpoint compatibility.** The previous binary `best.pth` cannot be
+   loaded into the new decoder because the final `mask_head.weight` has
+   shape `(7, 32, 1, 1)` instead of `(1, 32, 1, 1)`. Re-training is
+   required. The earlier checkpoints should be kept (e.g. by moving
+   `checkpoints/` to `checkpoints_binary/`) for the before/after comparison
+   in the course report.
+
+4. **`history.jsonl` continuity.** New runs append `iou_per_class` rows; old
+   runs do not have this field. `visualize.py`'s history plotting tolerates
+   either, but for clarity the new training run should write to a fresh
+   checkpoint directory rather than appending to the binary run's JSONL.
+
+### How to reach the previous (binary) behaviour
+
+The binary mask is recoverable on the fly from the multi-class one without
+re-training: take the union of channels 0 (`grasp`) and 6 (`wrap-grasp`)
+from `batch['mask']`. The decoder's binary checkpoint is preserved in the
+binary checkpoint directory if it was archived as suggested above.
+
+---
+
+## Previous architecture — multi-scale fusion + RGB skip connections
 
 ### Motivation
 
