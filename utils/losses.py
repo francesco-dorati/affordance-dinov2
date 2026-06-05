@@ -49,6 +49,12 @@ class DiceBCELoss(nn.Module):
     def __init__(self, bce_weight: float = 1.0, dice_weight: float = 1.0,
                  pos_weight: torch.Tensor = None):
         super().__init__()
+        # BCEWithLogitsLoss broadcasts pos_weight right-aligned with `target`.
+        # Our targets are [B, C, H, W]; a 1-D pos_weight of length C would
+        # therefore try to match the W axis. Reshape to [C, 1, 1] so it
+        # right-aligns as [1, C, 1, 1] and lines up with the channel dim.
+        if pos_weight is not None and pos_weight.dim() == 1:
+            pos_weight = pos_weight.view(-1, 1, 1)
         self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         self.bce_w = bce_weight
         self.dice_w = dice_weight
