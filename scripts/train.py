@@ -27,6 +27,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
+from argparse import BooleanOptionalAction
 
 import torch
 import torch.optim as optim
@@ -68,9 +69,11 @@ def get_args():
     p.add_argument('--w_normal',   type=float, default=5.0)
     p.add_argument('--w_smooth',   type=float, default=0.5)
     p.add_argument('--no_augment', action='store_true')
-    p.add_argument('--class_weights', action='store_true',
+    p.add_argument('--class_weights', action=BooleanOptionalAction, default=True,
                    help="Apply per-class pos_weight to BCE based on "
                         "frequency-inverse scan of the training set. "
+                        "ON by default (lifts rare classes); pass "
+                        "--no-class_weights to disable for an ablation run. "
                         "Safe to combine with --resume.")
     p.add_argument('--weight_power', type=float, default=0.5,
                    help="Exponent for class-weight schedule: "
