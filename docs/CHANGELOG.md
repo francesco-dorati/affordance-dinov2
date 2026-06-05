@@ -88,6 +88,27 @@ re-training: take the union of channels 0 (`grasp`) and 6 (`wrap-grasp`)
 from `batch['mask']`. The decoder's binary checkpoint is preserved in the
 binary checkpoint directory if it was archived as suggested above.
 
+### Optional: frequency-inverse class weights
+
+A `--class_weights` flag was added to `scripts/train.py` after evaluation of
+the first 25-epoch run revealed strong minority-class overfitting on
+`support` (train IoU 0.89 → val 0.36) and `scoop` (0.88 → 0.58). The flag
+scans the training set's `.mat` labels once at startup (cached to
+`checkpoints/class_pixel_counts.json`) and derives a per-channel
+`pos_weight = (N_neg / N_pos) ** weight_power`, clipped to `weight_clip`.
+The default schedule (`weight_power=0.5`, `weight_clip=15.0`) is the
+square-root inverse-frequency rule, applied conservatively. The vector is
+recorded in `run_config.json` and in the first row of `history.jsonl`.
+
+Safe to combine with `--resume`: the optimizer state from the previous
+unweighted run re-equilibrates to the new gradient scale within a couple of
+epochs; no checkpoint surgery required.
+
+```bash
+# Resume the existing run with class weights for 15 more epochs.
+python scripts/train.py --resume --class_weights --epochs 40
+```
+
 ---
 
 ## Previous architecture — multi-scale fusion + RGB skip connections

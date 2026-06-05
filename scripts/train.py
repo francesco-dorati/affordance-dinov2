@@ -39,7 +39,11 @@ sys.path.append(str(PROJECT_ROOT))
 from config import RAW_TOOLS, TRAIN_INTRINSICS, AFFORDANCE_CLASSES, N_AFFORDANCE_CLASSES
 from models.backbone import DINOv2Backbone
 from models.decoder import MultiTaskDecoder
-from utils.dataset import UMDAffordanceDataset, instance_split
+from utils.dataset import (
+    UMDAffordanceDataset,
+    instance_split,
+    compute_class_pixel_counts,
+)
 from utils.losses import (
     DiceBCELoss,
     masked_cosine_loss,
@@ -64,12 +68,66 @@ def get_args():
     p.add_argument('--w_normal',   type=float, default=5.0)
     p.add_argument('--w_smooth',   type=float, default=0.5)
     p.add_argument('--no_augment', action='store_true')
+    p.add_argument('--class_weights', action='store_true',
+                   help="Apply per-class pos_weight to BCE based on "
+                        "frequency-inverse scan of the training set. "
+                        "Safe to combine with --resume.")
+    p.add_argument('--weight_power', type=float, default=0.5,
+                   help="Exponent for class-weight schedule: "
+                        "pos_weight = (N_neg / N_pos) ** weight_power. "
+                        "0.5 (sqrt, default) is moderate; 1.0 is aggressive; "
+                        "0.25 is very gentle.")
+    p.add_argument('--weight_clip', type=float, default=15.0,
+                   help="Cap on per-class pos_weight to prevent rare classes "
+                        "from dominating the BCE gradient.")
     return p.parse_args()
 
 
 # =====================================================================
 # 2. Helpers
 # =====================================================================
+def get_or_compute_class_weights(dataset, train_idx, cache_path,
+                                 weight_power: float, weight_clip: float):
+    """Scan training labels once (caching the result), then derive a per-class
+    pos_weight tensor of shape [N_AFFORDANCE_CLASSES].
+
+    The scan walks the .mat label files in `train_idx` and counts positive
+    pixels per channel. The first call writes `cache_path`; subsequent calls
+    load it instantly. Re-scan by deleting the cache file.
+    """
+    if cache_path.exists():
+        with open(cache_path) as f:
+            data = json.load(f)
+        counts = np.array(data["pixel_counts"], dtype=np.int64)
+        total_pixels = int(data["total_pixels"])
+        print(f"Loaded cached class pixel counts from {cache_path}")
+    else:
+        print("Scanning training set to compute class pixel counts...")
+        counts, total_pixels = compute_class_pixel_counts(
+            dataset, indices=train_idx, verbose=True,
+        )
+        with open(cache_path, "w") as f:
+            json.dump({
+                "pixel_counts": counts.tolist(),
+                "total_pixels": int(total_pixels),
+                "classes": list(AFFORDANCE_CLASSES),
+                "n_samples_scanned": len(train_idx),
+            }, f, indent=2)
+        print(f"Wrote class pixel counts cache to {cache_path}")
+
+    # pos_weight per class: (N_neg / N_pos) ** weight_power, clipped.
+    counts_safe = np.maximum(counts, 1)
+    neg = total_pixels - counts
+    raw = (neg / counts_safe) ** weight_power
+    weights = np.clip(raw, 1.0, weight_clip)
+
+    print("Per-class loss weights (BCE pos_weight):")
+    for cls, c, w in zip(AFFORDANCE_CLASSES, counts, weights):
+        pct = 100.0 * c / max(total_pixels, 1)
+        print(f"  {cls:12s}  pixels={c:>12d} ({pct:>5.2f}%)  pos_weight={w:>5.2f}")
+    return torch.tensor(weights, dtype=torch.float32)
+
+
 def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
     """Run one full pass over `loader` and return aggregated metrics."""
     decoder.eval()
@@ -126,7 +184,8 @@ def main():
 
     # Persist the run config so we know what produced this checkpoint dir.
     # Record the affordance class order so downstream tools (evaluate.py,
-    # visualize.py) interpret the 7 mask channels correctly.
+    # visualize.py) interpret the 7 mask channels correctly. The class weight
+    # vector is filled in below once it has been computed/loaded.
     run_cfg = dict(vars(args))
     run_cfg["affordance_classes"] = list(AFFORDANCE_CLASSES)
     run_cfg["n_affordance_classes"] = N_AFFORDANCE_CLASSES
@@ -157,7 +216,19 @@ def main():
                                 n_classes=N_AFFORDANCE_CLASSES).to(DEVICE)
 
     optimizer = optim.AdamW(decoder.parameters(), lr=args.lr, weight_decay=1e-4)
-    mask_loss_fn = DiceBCELoss()
+
+    # ---- Optional per-class loss weights ----
+    pos_weight = None
+    weights_record = None
+    if args.class_weights:
+        weights_cache = CKPT_DIR / "class_pixel_counts.json"
+        pos_weight_cpu = get_or_compute_class_weights(
+            train_ds, train_idx, weights_cache,
+            weight_power=args.weight_power, weight_clip=args.weight_clip,
+        )
+        pos_weight = pos_weight_cpu.to(DEVICE)
+        weights_record = pos_weight_cpu.tolist()
+    mask_loss_fn = DiceBCELoss(pos_weight=pos_weight)
 
     # ---- Resume ----
     start_epoch, best_val = 0, float('inf')
@@ -170,11 +241,18 @@ def main():
         best_val = ck['best_val']
         print(f"Resumed at epoch {start_epoch}  | best val {best_val:.4f}")
 
+    # ---- Update run_config now that weights are known ----
+    if weights_record is not None:
+        run_cfg["class_pos_weights"] = weights_record
+        with open(CKPT_DIR / "run_config.json", "w") as f:
+            json.dump(run_cfg, f, indent=2)
+
     # ---- Logger ----
     logger = JSONLLogger(CKPT_DIR / "history.jsonl")
     logger.log(event="start", args=vars(args), device=DEVICE,
                n_train=len(train_idx), n_val=len(val_idx),
-               start_epoch=start_epoch, target_epochs=args.epochs)
+               start_epoch=start_epoch, target_epochs=args.epochs,
+               class_pos_weights=weights_record)
 
     # ---- Loop ----
     try:
