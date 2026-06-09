@@ -7,9 +7,6 @@ as the perception primitive for a humanoid robotics stack: tells the robot
 *what part of an object to interact with* and *how to approach it*, without
 3D reconstruction.
 
-This repository is the final project for a Computer Vision course and the
-seed of a perception module for a humanoid robotics startup.
-
 ---
 
 ## What it does
@@ -29,7 +26,7 @@ Combined with depth (at inference time only, not required for the network),
 these outputs yield a complete robotic-grasp packet: target centroid (X, Y, Z)
 and approach vector (N_x, N_y, N_z).
 
-## Approach in one paragraph
+## Approach
 
 A frozen **DINOv2 ViT-Small** backbone extracts multi-scale semantic features
 from four intermediate transformer layers. A **DPT-style multi-scale fusion
@@ -140,7 +137,7 @@ python scripts/visualize.py --history checkpoints/history.jsonl
 python scripts/evaluate.py  --checkpoint checkpoints/best.pth
 
 # Try it on phone photos
-python scripts/predict.py --input_dir data/in_the_wild
+python scripts/predict.py --input_dir data/real-world-data
 ```
 
 Detailed CLI reference for every script and flag in
