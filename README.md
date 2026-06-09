@@ -69,13 +69,16 @@ turner from 11% → 51%. The improvement comes despite the new metric being
 strictly harder (mean across 7 channels rather than IoU of a 2-class union).
 
 <p align="center">
-  <img src="docs/figures/sample_knife_cut_grasp.png" alt="knife_01 — per-class affordance predictions on a held-out knife" width="900"/>
+  <img src="docs/figures/sample_mug.png" alt="Held-out mug — three affordances predicted simultaneously" width="900"/>
 </p>
 
-A representative prediction on a held-out knife (`knife_01`) the model has
-never seen at training time: `cut` localises the blade, `grasp` covers the
-handle, and the surface normals follow the knife geometry. Per-class IoU
-0.93 (`cut`) and 0.85 (`grasp`).
+A representative prediction on a held-out mug the model has never seen at
+training time. Three affordance channels fire on the same object at once:
+`wrap-grasp` on the handle, `contain` in the cup interior, and `grasp` on
+the rim. The surface normals follow the mug's geometry. This image is the
+clearest illustration of why the head is **multi-label** rather than
+multi-class — a single object legitimately exposes multiple, spatially
+distinct, simultaneously-correct affordances.
 
 See [`docs/RESULTS.md`](docs/RESULTS.md) for the per-class, per-tool, and
 in-the-wild qualitative breakdown.
