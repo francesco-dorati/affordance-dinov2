@@ -88,6 +88,36 @@ re-training: take the union of channels 0 (`grasp`) and 6 (`wrap-grasp`)
 from `batch['mask']`. The decoder's binary checkpoint is preserved in the
 binary checkpoint directory if it was archived as suggested above.
 
+### Final training run + in-the-wild qualitative evaluation
+
+After enabling class-weighted loss as the default, a full 40-epoch run was
+executed (resume across three sessions). Best checkpoint at epoch 15 with
+val mean-IoU 0.7697 (`evaluation_val.json`); no improvement through epoch
+40 confirmed convergence. Headline comparison versus the binary baseline:
+
+| Metric | Binary baseline | Final (weighted multi-class) |
+|---|---|---|
+| Overall IoU @ 0.5 | 0.7128 | **0.7697** |
+| Tool families with any IoU > 0 | 19 / 21 | 21 / 21 |
+| Best per-class IoU | wrap-grasp 0.890 | wrap-grasp 0.881 |
+| Worst per-class IoU | n/a (only 2 classes) | support 0.526 |
+| Mean angular error | 24.38° | 24.26° |
+| `bowl_02` IoU | 0.000 | 0.977 |
+| `turner_06` IoU | 0.113 | 0.508 |
+
+Two new artifacts were added:
+
+| File | Purpose |
+|---|---|
+| `scripts/plot_comparison.py` | Reads two `evaluation_val.json` files and produces the binary-vs-multi-class grouped-bar comparison figure. |
+| `scripts/predict.py` | Runs the trained checkpoint on a folder of RGB images with no GT required. Used for in-the-wild evaluation. |
+| `notebooks/in_the_wild_inference.ipynb` | Capture-iterate-inspect loop for phone-photo inference. |
+
+An in-the-wild qualitative pass (21 phone-captured images of kitchenware)
+exposed three failure modes documented in `RESULTS.md` §4: `grasp`
+over-activation on textured backgrounds, conservative `contain` extent on
+oblique viewing angles, and complete failure on transparent objects.
+
 ### Default: frequency-inverse class weights
 
 After evaluation of the first 25-epoch run revealed strong minority-class

@@ -1,0 +1,22 @@
+{
+  "pixel_counts": [
+    27785116,
+    13620376,
+    6642592,
+    30855824,
+    6379048,
+    8377028,
+    16909776
+  ],
+  "total_pixels": 4626628608,
+  "classes": [
+    "grasp",
+    "cut",
+    "scoop",
+    "contain",
+    "pound",
+    "support",
+    "wrap-grasp"
+  ],
+  "n_samples_scanned": 23052
+}

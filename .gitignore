@@ -1,11 +1,38 @@
-# Ignore data and models
+# --- Datasets and model weights ---
 data/
 *.pth
 *.pt
 
-# Ignore Python cache
+# --- Python cache ---
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
+# --- macOS ---
 .DS_Store
+
+# --- Generated reports and figures (regenerable from scripts/) ---
+reports/
+
+# --- Per-run checkpoint artifacts ---
+# Model weights (*.pth) already covered above. These are run-specific
+# artifacts that shouldn't pollute git but are useful locally.
+checkpoints/samples/
+checkpoints/training_curves.png
+checkpoints/training_summary.txt
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Build / packaging ---
+*.egg-info/
+build/
+dist/

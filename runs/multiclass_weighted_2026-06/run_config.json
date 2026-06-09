@@ -1,0 +1,32 @@
+{
+  "resume": true,
+  "use_drive": false,
+  "epochs": 40,
+  "batch_size": 8,
+  "lr": 0.0001,
+  "w_normal": 5.0,
+  "w_smooth": 0.5,
+  "no_augment": false,
+  "class_weights": true,
+  "weight_power": 0.5,
+  "weight_clip": 15.0,
+  "affordance_classes": [
+    "grasp",
+    "cut",
+    "scoop",
+    "contain",
+    "pound",
+    "support",
+    "wrap-grasp"
+  ],
+  "n_affordance_classes": 7,
+  "class_pos_weights": [
+    12.865249633789062,
+    15.0,
+    15.0,
+    12.204238891601562,
+    15.0,
+    15.0,
+    15.0
+  ]
+}
