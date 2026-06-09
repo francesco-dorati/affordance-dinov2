@@ -28,19 +28,27 @@ and approach vector (N_x, N_y, N_z).
 
 ## Approach
 
+<p align="center">
+  <img src="docs/figures/architecture_overview.svg" alt="System architecture overview" width="640"/>
+</p>
+
 A frozen **DINOv2 ViT-Small** backbone extracts multi-scale semantic features
 from four intermediate transformer layers. A **DPT-style multi-scale fusion
 decoder** projects and concatenates those features at 32×32, then
 progressively upsamples to 448×448 with **RGB skip connections** from a
 small trainable CNN stem — the skips supply the high-frequency spatial
 detail the ViT alone cannot reconstruct. Two separate heads then emit the
-mask logits and the normal vectors. Training uses **per-channel BCE +
-soft Dice loss** with **frequency-inverse class weights** to address heavy
-class imbalance, **masked cosine loss** for normals over annotated affordance
-pixels, and **edge-aware smoothness** to suppress normal jitter in flat
-regions.
+mask logits and the normal vectors.
 
-Full architectural detail with paper-style diagram in
+Training uses **per-channel BCE + soft Dice loss** with **frequency-inverse
+class weights** to address heavy class imbalance (every affordance class is
+under 1% of total pixels), **masked cosine loss** for normals over annotated
+affordance pixels, and **edge-aware smoothness** to suppress normal jitter
+in flat regions. Only the ~5M-parameter decoder is trained; the ViT remains
+fixed, which keeps training stable and lets the model inherit DINOv2's
+web-scale visual priors rather than overfitting them.
+
+Layer-by-layer detail with the full paper-style diagram in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Headline result
@@ -57,69 +65,20 @@ families, instance-split val of 5791 samples):
 
 The class-weighted multi-class model recovers tool families that were
 **invisible** to the binary baseline: bowls went from 0% → 92–98% IoU, the
-turner from 11% → 51%. See [`docs/RESULTS.md`](docs/RESULTS.md) for the full
-per-class, per-tool, and qualitative breakdown.
+turner from 11% → 51%. The improvement comes despite the new metric being
+strictly harder (mean across 7 channels rather than IoU of a 2-class union).
 
-## Repository structure
+<p align="center">
+  <img src="docs/figures/sample_knife_cut_grasp.png" alt="knife_01 — per-class affordance predictions on a held-out knife" width="900"/>
+</p>
 
-```
-cv-project/
-│
-├── README.md             # this file — high-level overview
-├── requirements.txt
-├── config.py             # paths, training defaults, camera intrinsics
-│
-├── docs/                 # all documentation
-│   ├── RESULTS.md        # canonical results: numbers, findings, limitations
-│   ├── ARCHITECTURE.md   # design, layer shapes, paper-style diagram
-│   ├── USAGE.md          # how to run every entry point
-│   ├── CHANGELOG.md      # chronological code evolution
-│   ├── FUTURE_DEVELOPMENT.md  # phased roadmap
-│   └── Project_Definition.md
-│
-├── models/               # network components
-│   ├── backbone.py       #   frozen DINOv2, multi-scale 4-layer tap
-│   └── decoder.py        #   multi-scale fusion + RGB skips + heads
-│
-├── utils/                # data, loss, augmentation, geometry
-│   ├── dataset.py        #   UMD dataset, instance split, class-pixel scan
-│   ├── augmentations.py  #   joint RGB+mask+normal augmentation
-│   ├── losses.py         #   DiceBCE + cosine + smoothness + IoU
-│   ├── geometry.py       #   depth → normals via finite differences
-│   ├── training_logger.py
-│   └── visualization.py
-│
-├── scripts/              # entry points
-│   ├── train.py          #   training with per-class loss weights
-│   ├── evaluate.py       #   detailed per-class / per-tool metrics
-│   ├── visualize.py      #   training curves + sample grids
-│   ├── predict.py        #   inference on phone photos
-│   ├── plot_comparison.py #  binary-vs-final comparison figure
-│   └── archive_run.sh    #   snapshot checkpoints/ into runs/
-│
-├── notebooks/            # interactive exploration
-│   ├── README.md         #   notebook status guide
-│   ├── data_exploration.ipynb
-│   ├── in_the_wild_inference.ipynb
-│   ├── local_training.ipynb    (historical)
-│   └── colab_training.ipynb    (historical)
-│
-├── data/                 # datasets (gitignored)
-│   └── raw/part-affordance-dataset/
-│
-├── checkpoints/          # active working run (best.pth, history, etc.)
-│
-├── runs/                 # archived completed runs (append-only)
-│   └── INDEX.md          #   table of all archived runs
-│
-├── reports/              # generated figures and predictions (gitignored)
-│   ├── comparisons/      #   plot_comparison.py output
-│   ├── predictions/      #   predict.py per-batch output
-│   └── qualitative/      #   cherry-picked images for slides
-│
-└── archive/              # historical code and checkpoints
-    └── v1/               #   original single-scale ViT + simple decoder
-```
+A representative prediction on a held-out knife (`knife_01`) the model has
+never seen at training time: `cut` localises the blade, `grasp` covers the
+handle, and the surface normals follow the knife geometry. Per-class IoU
+0.93 (`cut`) and 0.85 (`grasp`).
+
+See [`docs/RESULTS.md`](docs/RESULTS.md) for the per-class, per-tool, and
+in-the-wild qualitative breakdown.
 
 ## Quick start
 

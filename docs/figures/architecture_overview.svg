@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#444"/>
+    </marker>
+  </defs>
+
+  <!-- Input -->
+  <rect x="14" y="78" width="84" height="44" rx="6" fill="#eef3fb" stroke="#3d6db4" stroke-width="1.5"/>
+  <text x="56" y="96" text-anchor="middle" font-size="12" fill="#1c3a64">RGB</text>
+  <text x="56" y="114" text-anchor="middle" font-size="11" fill="#1c3a64">448 × 448 × 3</text>
+
+  <line x1="98" y1="100" x2="138" y2="100" stroke="#444" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- DINOv2 backbone -->
+  <rect x="138" y="62" width="160" height="76" rx="6" fill="#fff3e6" stroke="#c87613" stroke-width="1.5"/>
+  <text x="218" y="84" text-anchor="middle" font-size="12.5" font-weight="600" fill="#7a4509">DINOv2 ViT-S</text>
+  <text x="218" y="100" text-anchor="middle" font-size="11" fill="#7a4509">(frozen)</text>
+  <text x="218" y="118" text-anchor="middle" font-size="10.5" fill="#7a4509">multi-scale features</text>
+  <text x="218" y="131" text-anchor="middle" font-size="10.5" fill="#7a4509">layers 2 · 5 · 8 · 11</text>
+
+  <line x1="298" y1="100" x2="338" y2="100" stroke="#444" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- Decoder -->
+  <rect x="338" y="62" width="170" height="76" rx="6" fill="#eafbe7" stroke="#3a8a2a" stroke-width="1.5"/>
+  <text x="423" y="84" text-anchor="middle" font-size="12.5" font-weight="600" fill="#1f4f15">Fusion decoder</text>
+  <text x="423" y="100" text-anchor="middle" font-size="10.5" fill="#1f4f15">multi-scale ViT fuse @ 32²</text>
+  <text x="423" y="115" text-anchor="middle" font-size="10.5" fill="#1f4f15">+ RGB skip connections</text>
+  <text x="423" y="130" text-anchor="middle" font-size="10.5" fill="#1f4f15">32 → 56 → 112 → 224 → 448</text>
+
+  <line x1="508" y1="100" x2="548" y2="100" stroke="#444" stroke-width="1.6"/>
+
+  <!-- Split to heads -->
+  <line x1="548" y1="100" x2="548" y2="50" stroke="#444" stroke-width="1.6"/>
+  <line x1="548" y1="100" x2="548" y2="150" stroke="#444" stroke-width="1.6"/>
+  <line x1="548" y1="50" x2="590" y2="50" stroke="#444" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <line x1="548" y1="150" x2="590" y2="150" stroke="#444" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- Mask head -->
+  <rect x="590" y="28" width="116" height="44" rx="6" fill="#f7e6fb" stroke="#8a3da9" stroke-width="1.5"/>
+  <text x="648" y="46" text-anchor="middle" font-size="12" font-weight="600" fill="#4a1864">Affordance mask</text>
+  <text x="648" y="62" text-anchor="middle" font-size="10.5" fill="#4a1864">7 channels (multi-label)</text>
+
+  <!-- Normal head -->
+  <rect x="590" y="128" width="116" height="44" rx="6" fill="#fbeaea" stroke="#a93d3d" stroke-width="1.5"/>
+  <text x="648" y="146" text-anchor="middle" font-size="12" font-weight="600" fill="#641818">Surface normals</text>
+  <text x="648" y="162" text-anchor="middle" font-size="10.5" fill="#641818">3 channels (unit vectors)</text>
+</svg>
