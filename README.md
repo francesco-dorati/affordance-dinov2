@@ -1,4 +1,12 @@
-# Geometric–Semantic Fusion for Autonomous Robotic Affordance
+# Multi-Task Affordance Segmentation for Robotic Manipulation
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+"/></a>
+  <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c" alt="PyTorch 2.0+"/></a>
+  <a href="https://github.com/facebookresearch/dinov2"><img src="https://img.shields.io/badge/Backbone-DINOv2-ff9d2a" alt="DINOv2 backbone"/></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License"/></a>
+  <img src="https://img.shields.io/badge/Status-research%20preview-orange" alt="Research preview"/>
+</p>
 
 A multi-task perception model that predicts pixel-precise **affordance masks**
 (where on an object you can grasp, cut, pour into, etc.) and **dense surface
@@ -143,6 +151,10 @@ front-end for cluttered scenes (the architectural bridge to humanoid
 deployment).
 
 ## License and acknowledgements
+
+Released under the [MIT License](LICENSE). If you use this work, please cite
+via the metadata in [`CITATION.cff`](CITATION.cff) (GitHub renders this as a
+"Cite this repository" button at the top of the page).
 
 Built on the [UMD Part Affordance Dataset](http://users.umiacs.umd.edu/~amyers/part-affordance-dataset/)
 (Myers et al., 2015) and Meta AI's [DINOv2](https://github.com/facebookresearch/dinov2)

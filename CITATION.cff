@@ -1,0 +1,53 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Affordance-DINOv2: Multi-label affordance segmentation and surface normals from a frozen DINOv2 backbone"
+abstract: >
+  A multi-task perception model that predicts pixel-precise affordance masks
+  (seven multi-label channels: grasp, cut, scoop, contain, pound, support,
+  wrap-grasp) and dense surface normals from a single RGB image. Built on a
+  frozen DINOv2 ViT-Small backbone with a DPT-style multi-scale fusion
+  decoder and RGB skip connections. Designed as a perception primitive for
+  humanoid robotic manipulation.
+authors:
+  - family-names: Dorati
+    given-names: Francesco
+    email: fd.francescodorati@gmail.com
+keywords:
+  - computer vision
+  - affordance prediction
+  - dense prediction
+  - DINOv2
+  - PyTorch
+  - robotics
+  - humanoid manipulation
+  - multi-task learning
+  - multi-label segmentation
+license: MIT
+date-released: 2026-06-09
+version: "1.0.0"
+references:
+  - type: article
+    title: "Affordance Detection of Tool Parts from Geometric Features"
+    authors:
+      - family-names: Myers
+        given-names: Austin
+      - family-names: Teo
+        given-names: Ching L.
+      - family-names: Fermüller
+        given-names: Cornelia
+      - family-names: Aloimonos
+        given-names: Yiannis
+    conference:
+      name: "IEEE International Conference on Robotics and Automation (ICRA)"
+    year: 2015
+  - type: article
+    title: "DINOv2: Learning Robust Visual Features without Supervision"
+    authors:
+      - family-names: Oquab
+        given-names: Maxime
+      - family-names: Darcet
+        given-names: Timothée
+      - family-names: Moutakanni
+        given-names: Théo
+    journal: "Transactions on Machine Learning Research"
+    year: 2024
