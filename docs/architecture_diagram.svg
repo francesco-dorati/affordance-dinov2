@@ -1,266 +1,273 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1620" font-family="-apple-system, 'Segoe UI', Arial, sans-serif">
-  <defs>
-    <style>
-      .input    { fill: #E8E8E8; stroke: #555; stroke-width: 2; }
-      .vit      { fill: #C5DAEC; stroke: #4A7BA8; stroke-width: 2; }
-      .vit-lite { fill: #DCE9F3; stroke: #4A7BA8; stroke-width: 1.5; }
-      .rgb      { fill: #CDE6C4; stroke: #5A8E4C; stroke-width: 2; }
-      .rgb-lite { fill: #E0EFD9; stroke: #5A8E4C; stroke-width: 1.5; }
-      .proj     { fill: #F4D499; stroke: #A77A2E; stroke-width: 2; }
-      .fuse     { fill: #F2B47F; stroke: #B26A2A; stroke-width: 2; }
-      .neck     { fill: #E5C0F0; stroke: #7E4FA2; stroke-width: 2; }
-      .head     { fill: #F2B0CC; stroke: #A1538E; stroke-width: 2; }
-      .out      { fill: #FFF1A8; stroke: #A18B30; stroke-width: 2; }
-      .loss     { fill: #FFE6B0; stroke: #B0913C; stroke-width: 2; stroke-dasharray: 5,3; }
-      .grouping { fill: none; stroke: #888; stroke-dasharray: 6,4; stroke-width: 1.2; rx: 12; ry: 12; }
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1380 1155" font-family="-apple-system, 'Segoe UI', Arial, sans-serif">
+<defs>
+  <style>
+    .frozen   { fill:#D6E8F7; stroke:#2A64A0; stroke-width:1.8; }
+    .trainable{ fill:#D2EDD0; stroke:#367A28; stroke-width:1.8; }
+    .fusion   { fill:#FDEAC6; stroke:#BF7018; stroke-width:1.8; }
+    .shared   { fill:#E2DAF6; stroke:#4A38A0; stroke-width:1.8; }
+    .head-box { fill:#EAD8F5; stroke:#6030A8; stroke-width:1.8; }
+    .out-box  { fill:#F0F0F0; stroke:#606060; stroke-width:1.5; }
+    .loss-box { fill:#FEFCD0; stroke:#A09010; stroke-width:1.5; stroke-dasharray:5,3; }
+    .in-box   { fill:#E8EAED; stroke:#505060; stroke-width:1.8; }
 
-      .label       { font-size: 14px; fill: #1a1a1a; font-weight: 600; }
-      .sub         { font-size: 11px; fill: #444; }
-      .shape       { font-size: 11px; fill: #28288A; font-family: 'SF Mono','Courier New',monospace; }
-      .title       { font-size: 22px; font-weight: 700; fill: #111; }
-      .subtitle    { font-size: 13px; fill: #555; }
-      .group-title { font-size: 13px; font-weight: 700; fill: #555; letter-spacing: 0.5px; }
+    .t-title  { font-size:19px; font-weight:700; fill:#111; }
+    .t-sub    { font-size:12px; fill:#666; }
+    .t-col    { font-size:10px; font-weight:700; fill:#888; letter-spacing:1.2px; }
+    .t-blk    { font-size:13px; font-weight:600; fill:#1a1a1a; }
+    .t-detail { font-size:11px; fill:#555; }
+    .t-shape  { font-size:11px; fill:#1A28B0; font-family:'SF Mono','Consolas','Courier New',monospace; }
+    .t-albl   { font-size:10px; fill:#44448A; font-family:'SF Mono','Consolas','Courier New',monospace; }
 
-      .arrow    { stroke: #333;    stroke-width: 1.8; fill: none; marker-end: url(#arrow-k); }
-      .arrow-g  { stroke: #5A8E4C; stroke-width: 1.6; fill: none; marker-end: url(#arrow-g); stroke-dasharray: 6,3; }
-      .arrow-b  { stroke: #4A7BA8; stroke-width: 1.6; fill: none; marker-end: url(#arrow-b); }
-      .arrow-r  { stroke: #A1538E; stroke-width: 1.6; fill: none; marker-end: url(#arrow-r); }
-    </style>
-    <marker id="arrow-k" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L9,3 z" fill="#333" />
-    </marker>
-    <marker id="arrow-g" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L9,3 z" fill="#5A8E4C" />
-    </marker>
-    <marker id="arrow-b" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L9,3 z" fill="#4A7BA8" />
-    </marker>
-    <marker id="arrow-r" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-      <path d="M0,0 L0,6 L9,3 z" fill="#A1538E" />
-    </marker>
-  </defs>
+    .a-main { stroke:#444; stroke-width:1.8; fill:none; marker-end:url(#ah-dark); }
+    .a-vit  { stroke:#2A64A0; stroke-width:1.8; fill:none; marker-end:url(#ah-blue); }
+    .a-skip { stroke:#367A28; stroke-width:1.8; fill:none; marker-end:url(#ah-green); stroke-dasharray:6,3; }
+    .a-thin { stroke:#999; stroke-width:1.2; fill:none; marker-end:url(#ah-gray); }
+    .a-fork { stroke:#444; stroke-width:1.6; fill:none; }
+  </style>
+  <marker id="ah-dark"  markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#444"/></marker>
+  <marker id="ah-blue"  markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#2A64A0"/></marker>
+  <marker id="ah-green" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#367A28"/></marker>
+  <marker id="ah-gray"  markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#888"/></marker>
+</defs>
 
-  <!-- ============ TITLE ============ -->
-  <text x="750" y="36" text-anchor="middle" class="title">Multi-Task Affordance Decoder</text>
-  <text x="750" y="58" text-anchor="middle" class="subtitle">Frozen DINOv2 (multi-scale)  +  RGB skip connections  →  affordance mask  +  surface normals</text>
+<!-- ═══ TITLE ═══ -->
+<text x="690" y="30" text-anchor="middle" class="t-title">Multi-Task Affordance Network — Architecture</text>
+<text x="690" y="50" text-anchor="middle" class="t-sub">Frozen DINOv2 backbone  ·  DPT-style multi-scale fusion decoder  ·  7-class affordance mask  +  surface normals</text>
 
-  <!-- ============ INPUT ============ -->
-  <rect x="640" y="100" width="220" height="60" rx="8" class="input"/>
-  <text x="750" y="125" text-anchor="middle" class="label">RGB Image</text>
-  <text x="750" y="145" text-anchor="middle" class="shape">[B, 3, 448, 448]</text>
+<!-- ═══ INPUT ═══ -->
+<rect x="510" y="66" width="360" height="52" rx="8" class="in-box"/>
+<text x="690" y="87" text-anchor="middle" class="t-blk">RGB Image</text>
+<text x="690" y="106" text-anchor="middle" class="t-shape">[B, 3, 448, 448]</text>
 
-  <!-- splitter lines -->
-  <line x1="750" y1="160" x2="750" y2="180" class="arrow"/>
-  <path d="M 750,180 L 350,180 L 350,210" class="arrow"/>
-  <path d="M 750,180 L 1150,180 L 1150,210" class="arrow"/>
+<!-- Input fork — left to ViT, right to RGB Stem -->
+<path d="M 690,118 L 690,138 L 195,138 L 195,158" class="a-fork"/>
+<path d="M 690,138 L 1175,138 L 1175,158" class="a-fork"/>
+<circle cx="690" cy="138" r="3" fill="#444"/>
 
-  <!-- ============ ViT BRANCH (left) ============ -->
-  <rect x="80" y="200" width="540" height="640" class="grouping"/>
-  <text x="350" y="222" text-anchor="middle" class="group-title">VIT BRANCH (FROZEN ENCODER)</text>
+<!-- ═══════════════════════════════════════════════
+     LEFT COLUMN — ViT Branch (frozen backbone)
+     center_x=195  block_w=290  left=50  right=340
+     ═══════════════════════════════════════════════ -->
+<text x="195" y="156" text-anchor="middle" class="t-col">VIT BRANCH  ·  FROZEN</text>
 
-  <!-- DINOv2 box -->
-  <rect x="220" y="240" width="260" height="70" rx="8" class="vit"/>
-  <text x="350" y="265" text-anchor="middle" class="label">DINOv2 ViT-Small (frozen)</text>
-  <text x="350" y="282" text-anchor="middle" class="sub">12 transformer blocks, patch=14</text>
-  <text x="350" y="298" text-anchor="middle" class="sub">tap layers {2, 5, 8, 11}</text>
+<!-- DINOv2 block -->
+<rect x="50" y="163" width="290" height="80" rx="8" class="frozen"/>
+<text x="195" y="183" text-anchor="middle" class="t-blk">DINOv2 ViT-Small  (frozen)</text>
+<text x="195" y="199" text-anchor="middle" class="t-detail">21 M params  ·  patch size 14 px  ·  12 blocks</text>
+<text x="195" y="215" text-anchor="middle" class="t-detail">384-dim token embeddings  ·  32×32 spatial grid</text>
+<text x="195" y="231" text-anchor="middle" class="t-detail">intermediate output tapped at layers  2 · 5 · 8 · 11</text>
 
-  <line x1="350" y1="310" x2="350" y2="335" class="arrow"/>
+<!-- Arrow -->
+<line x1="195" y1="243" x2="195" y2="258" class="a-thin"/>
 
-  <!-- 4 ViT tap outputs (compact stack) -->
-  <rect x="170" y="335" width="360" height="80" rx="8" class="vit-lite"/>
-  <text x="350" y="357" text-anchor="middle" class="label">4 intermediate feature maps</text>
-  <text x="350" y="375" text-anchor="middle" class="sub">one per tapped layer</text>
-  <text x="350" y="400" text-anchor="middle" class="shape">each: [B, 384, 32, 32]</text>
+<!-- 4 intermediate feature maps -->
+<rect x="80" y="258" width="230" height="44" rx="7" class="frozen"/>
+<text x="195" y="276" text-anchor="middle" class="t-blk">4 × intermediate feature maps</text>
+<text x="195" y="293" text-anchor="middle" class="t-shape">each: [B, 384, 32, 32]</text>
 
-  <line x1="350" y1="415" x2="350" y2="440" class="arrow"/>
+<!-- Arrow -->
+<line x1="195" y1="302" x2="195" y2="317" class="a-thin"/>
 
-  <!-- vit_proj -->
-  <rect x="200" y="440" width="300" height="56" rx="8" class="proj"/>
-  <text x="350" y="463" text-anchor="middle" class="label">vit_proj  (4 × 1×1 Conv)</text>
-  <text x="350" y="482" text-anchor="middle" class="sub">channels 384 → 256, per layer</text>
+<!-- ViT Feature Fusion (trainable) -->
+<rect x="50" y="317" width="290" height="76" rx="8" class="fusion"/>
+<text x="195" y="337" text-anchor="middle" class="t-blk">ViT Feature Fusion  (trainable)</text>
+<text x="195" y="353" text-anchor="middle" class="t-detail">4× 1×1 Conv:  384 → 256 each</text>
+<text x="195" y="369" text-anchor="middle" class="t-detail">Concat:  [B, 1024, 32, 32]</text>
+<text x="195" y="385" text-anchor="middle" class="t-detail">ConvBlock 3×3 ×2:  1024 → 256</text>
 
-  <line x1="350" y1="496" x2="350" y2="520" class="arrow"/>
-  <text x="360" y="513" class="shape">4 × [B, 256, 32, 32]</text>
+<!-- Arrow from ViT fusion to FU1 (bent: right then down then right) -->
+<!-- Right edge of fusion block = x=340, center_y = 317+38 = 355 -->
+<!-- FU1 left edge = 495, FU1 center_y = 460+41 = 501 -->
+<path d="M 340,355 L 460,355 L 460,501 L 495,501" class="a-vit"/>
+<text x="462" y="350" class="t-albl" fill="#2A64A0">[B, 256, 32, 32]</text>
 
-  <!-- concat -->
-  <rect x="240" y="520" width="220" height="48" rx="8" class="proj"/>
-  <text x="350" y="540" text-anchor="middle" class="label">Concat along channels</text>
-  <text x="350" y="558" text-anchor="middle" class="shape">[B, 1024, 32, 32]</text>
+<!-- ═══════════════════════════════════════════════
+     RIGHT COLUMN — RGB Stem (trainable)
+     center_x=1175  block_w=280  left=1035  right=1315
+     ═══════════════════════════════════════════════ -->
+<text x="1175" y="156" text-anchor="middle" class="t-col">RGB STEM  ·  TRAINABLE</text>
 
-  <line x1="350" y1="568" x2="350" y2="595" class="arrow"/>
+<!-- RGB Stem header -->
+<rect x="1035" y="163" width="280" height="68" rx="8" class="trainable"/>
+<text x="1175" y="183" text-anchor="middle" class="t-blk">RGB Stem CNN</text>
+<text x="1175" y="199" text-anchor="middle" class="t-detail">3 strided conv blocks  (stride 2 each)</text>
+<text x="1175" y="215" text-anchor="middle" class="t-detail">produces spatial skips at 4 resolutions</text>
+<text x="1175" y="231" text-anchor="middle" class="t-detail">fine → coarse  ·  448² / 224² / 112² / 56²</text>
 
-  <!-- ConvBlock fuse -->
-  <rect x="220" y="595" width="260" height="56" rx="8" class="fuse"/>
-  <text x="350" y="617" text-anchor="middle" class="label">ConvBlock  (Conv 3×3 ×2)</text>
-  <text x="350" y="636" text-anchor="middle" class="sub">1024 → 256, BN + ReLU</text>
+<!-- Long vertical connector from stem header to s3 -->
+<!-- stem bottom = 231, s3 top = 473 -->
+<line x1="1175" y1="231" x2="1175" y2="473" class="a-thin"/>
+<text x="1185" y="360" class="t-detail" fill="#888">downsampling</text>
+<text x="1185" y="375" class="t-detail" fill="#888">chain  (×2 each)</text>
 
-  <line x1="350" y1="651" x2="350" y2="675" class="arrow"/>
+<!-- Skip level s3 — aligned with FU1 center y=501 -->
+<rect x="1050" y="473" width="250" height="56" rx="7" class="trainable"/>
+<text x="1175" y="493" text-anchor="middle" class="t-blk">skip  s3</text>
+<text x="1175" y="509" text-anchor="middle" class="t-shape">[B, 128,  56,  56]</text>
+<text x="1175" y="523" text-anchor="middle" class="t-detail">coarsest  ·  56 × 56</text>
 
-  <!-- Bottleneck -->
-  <rect x="240" y="675" width="220" height="52" rx="8" class="neck"/>
-  <text x="350" y="697" text-anchor="middle" class="label">Fused ViT features</text>
-  <text x="350" y="716" text-anchor="middle" class="shape">[B, 256, 32, 32]</text>
+<!-- Connector s3 to s2 -->
+<line x1="1175" y1="529" x2="1175" y2="571" class="a-thin"/>
 
-  <!-- ============ RGB STEM BRANCH (right) ============ -->
-  <rect x="880" y="200" width="540" height="640" class="grouping"/>
-  <text x="1150" y="222" text-anchor="middle" class="group-title">RGB STEM (TRAINABLE ENCODER)</text>
+<!-- Skip level s2 — aligned with FU2 center y=599 -->
+<rect x="1050" y="571" width="250" height="56" rx="7" class="trainable"/>
+<text x="1175" y="591" text-anchor="middle" class="t-blk">skip  s2</text>
+<text x="1175" y="607" text-anchor="middle" class="t-shape">[B,  96, 112, 112]</text>
+<text x="1175" y="621" text-anchor="middle" class="t-detail">112 × 112</text>
 
-  <rect x="1020" y="240" width="260" height="60" rx="8" class="rgb"/>
-  <text x="1150" y="263" text-anchor="middle" class="label">Shallow CNN stem</text>
-  <text x="1150" y="282" text-anchor="middle" class="sub">3 strided blocks producing 4 levels</text>
+<!-- Connector s2 to s1 -->
+<line x1="1175" y1="627" x2="1175" y2="669" class="a-thin"/>
 
-  <line x1="1150" y1="300" x2="1150" y2="330" class="arrow"/>
+<!-- Skip level s1 — aligned with FU3 center y=697 -->
+<rect x="1050" y="669" width="250" height="56" rx="7" class="trainable"/>
+<text x="1175" y="689" text-anchor="middle" class="t-blk">skip  s1</text>
+<text x="1175" y="705" text-anchor="middle" class="t-shape">[B,  64, 224, 224]</text>
+<text x="1175" y="719" text-anchor="middle" class="t-detail">224 × 224</text>
 
-  <!-- s0 — biggest (highest spatial resolution) -->
-  <rect x="930" y="330" width="440" height="50" rx="8" class="rgb-lite"/>
-  <text x="1150" y="350" text-anchor="middle" class="label">s0 — finest skip</text>
-  <text x="1150" y="368" text-anchor="middle" class="shape">[B, 32, 448, 448]</text>
+<!-- Connector s1 to s0 -->
+<line x1="1175" y1="725" x2="1175" y2="767" class="a-thin"/>
 
-  <line x1="1150" y1="380" x2="1150" y2="405" class="arrow"/>
+<!-- Skip level s0 — aligned with FU4 center y=795 -->
+<rect x="1050" y="767" width="250" height="56" rx="7" class="trainable"/>
+<text x="1175" y="787" text-anchor="middle" class="t-blk">skip  s0  (finest)</text>
+<text x="1175" y="803" text-anchor="middle" class="t-shape">[B,  32, 448, 448]</text>
+<text x="1175" y="817" text-anchor="middle" class="t-detail">448 × 448</text>
 
-  <rect x="965" y="405" width="370" height="50" rx="8" class="rgb-lite"/>
-  <text x="1150" y="425" text-anchor="middle" class="label">s1</text>
-  <text x="1150" y="443" text-anchor="middle" class="shape">[B, 64, 224, 224]</text>
+<!-- Skip arrows (green dashed, left-pointing, horizontally aligned with FU blocks) -->
+<!-- s3 → FU1  at y=501 -->
+<path d="M 1050,501 L 865,501" class="a-skip"/>
+<!-- s2 → FU2  at y=599 -->
+<path d="M 1050,599 L 865,599" class="a-skip"/>
+<!-- s1 → FU3  at y=697 -->
+<path d="M 1050,697 L 865,697" class="a-skip"/>
+<!-- s0 → FU4  at y=795 -->
+<path d="M 1050,795 L 865,795" class="a-skip"/>
 
-  <line x1="1150" y1="455" x2="1150" y2="480" class="arrow"/>
+<!-- Skip labels (small, on the arrow) -->
+<text x="945"  y="497" text-anchor="middle" class="t-albl" fill="#367A28">concat</text>
+<text x="945"  y="595" text-anchor="middle" class="t-albl" fill="#367A28">concat</text>
+<text x="945"  y="693" text-anchor="middle" class="t-albl" fill="#367A28">concat</text>
+<text x="945"  y="791" text-anchor="middle" class="t-albl" fill="#367A28">concat</text>
 
-  <rect x="1000" y="480" width="300" height="50" rx="8" class="rgb-lite"/>
-  <text x="1150" y="500" text-anchor="middle" class="label">s2</text>
-  <text x="1150" y="518" text-anchor="middle" class="shape">[B, 96, 112, 112]</text>
+<!-- ═══════════════════════════════════════════════
+     CENTER COLUMN — Decoder Cascade
+     center_x=680  block_w=370  left=495  right=865
+     FU1 center=501  FU2 center=599  FU3 center=697  FU4 center=795
+     ═══════════════════════════════════════════════ -->
+<text x="680" y="448" text-anchor="middle" class="t-col">DECODER CASCADE  ·  TRAINABLE</text>
 
-  <line x1="1150" y1="530" x2="1150" y2="555" class="arrow"/>
+<!-- FusionUp 1: 32² → 56² -->
+<rect x="495" y="460" width="370" height="82" rx="8" class="fusion"/>
+<text x="680" y="480" text-anchor="middle" class="t-blk">FusionUp 1  ·  32² → 56²</text>
+<text x="680" y="497" text-anchor="middle" class="t-detail">bilinear ×2  then concat skip s3</text>
+<text x="680" y="513" text-anchor="middle" class="t-detail">ConvBlock 3×3 ×2:  (256+128)=384 → 192</text>
+<text x="680" y="531" text-anchor="middle" class="t-shape">→ [B, 192, 56, 56]</text>
 
-  <rect x="1040" y="555" width="220" height="50" rx="8" class="rgb-lite"/>
-  <text x="1150" y="575" text-anchor="middle" class="label">s3 — coarsest skip</text>
-  <text x="1150" y="593" text-anchor="middle" class="shape">[B, 128, 56, 56]</text>
+<!-- Arrow FU1 → FU2 -->
+<line x1="680" y1="542" x2="680" y2="558" class="a-main"/>
 
-  <!-- ============ DECODER CASCADE (centered) ============ -->
-  <rect x="240" y="780" width="1020" height="520" class="grouping"/>
-  <text x="750" y="803" text-anchor="middle" class="group-title">DECODER CASCADE  (FUSION UPSAMPLING)</text>
+<!-- FusionUp 2: 56² → 112² -->
+<rect x="495" y="558" width="370" height="82" rx="8" class="fusion"/>
+<text x="680" y="578" text-anchor="middle" class="t-blk">FusionUp 2  ·  56² → 112²</text>
+<text x="680" y="595" text-anchor="middle" class="t-detail">bilinear ×2  then concat skip s2</text>
+<text x="680" y="611" text-anchor="middle" class="t-detail">ConvBlock 3×3 ×2:  (192+96)=288 → 128</text>
+<text x="680" y="629" text-anchor="middle" class="t-shape">→ [B, 128, 112, 112]</text>
 
-  <!-- Connection from bottleneck down/right to FusionUp1 -->
-  <path d="M 350,727 L 350,755 L 620,755 L 620,820" class="arrow-b"/>
-  <text x="495" y="748" class="shape">[B, 256, 32, 32]</text>
+<!-- Arrow FU2 → FU3 -->
+<line x1="680" y1="640" x2="680" y2="656" class="a-main"/>
 
-  <!-- FusionUp1 -->
-  <rect x="500" y="820" width="380" height="64" rx="8" class="fuse"/>
-  <text x="690" y="843" text-anchor="middle" class="label">FusionUp 1   (32×32 → 56×56)</text>
-  <text x="690" y="862" text-anchor="middle" class="sub">bilinear↑ • concat skip • ConvBlock(384→192)</text>
-  <text x="690" y="878" text-anchor="middle" class="shape">→ [B, 192, 56, 56]</text>
+<!-- FusionUp 3: 112² → 224² -->
+<rect x="495" y="656" width="370" height="82" rx="8" class="fusion"/>
+<text x="680" y="676" text-anchor="middle" class="t-blk">FusionUp 3  ·  112² → 224²</text>
+<text x="680" y="693" text-anchor="middle" class="t-detail">bilinear ×2  then concat skip s1</text>
+<text x="680" y="709" text-anchor="middle" class="t-detail">ConvBlock 3×3 ×2:  (128+64)=192 → 64</text>
+<text x="680" y="727" text-anchor="middle" class="t-shape">→ [B, 64, 224, 224]</text>
 
-  <!-- Skip arrow from s3 to FusionUp1 -->
-  <path d="M 1150,605 L 1150,635 L 880,635 L 880,850" class="arrow-g"/>
-  <text x="1010" y="628" class="shape" fill="#5A8E4C">skip s3 [B, 128, 56, 56]</text>
+<!-- Arrow FU3 → FU4 -->
+<line x1="680" y1="738" x2="680" y2="754" class="a-main"/>
 
-  <line x1="690" y1="884" x2="690" y2="908" class="arrow"/>
+<!-- FusionUp 4: 224² → 448² -->
+<rect x="495" y="754" width="370" height="82" rx="8" class="fusion"/>
+<text x="680" y="774" text-anchor="middle" class="t-blk">FusionUp 4  ·  224² → 448²</text>
+<text x="680" y="791" text-anchor="middle" class="t-detail">bilinear ×2  then concat skip s0</text>
+<text x="680" y="807" text-anchor="middle" class="t-detail">ConvBlock 3×3 ×2:  (64+32)=96 → 32</text>
+<text x="680" y="825" text-anchor="middle" class="t-shape">→ [B, 32, 448, 448]</text>
 
-  <!-- FusionUp2 -->
-  <rect x="500" y="908" width="380" height="64" rx="8" class="fuse"/>
-  <text x="690" y="931" text-anchor="middle" class="label">FusionUp 2   (56×56 → 112×112)</text>
-  <text x="690" y="950" text-anchor="middle" class="sub">bilinear↑ • concat skip • ConvBlock(288→128)</text>
-  <text x="690" y="966" text-anchor="middle" class="shape">→ [B, 128, 112, 112]</text>
+<!-- Arrow FU4 → Shared trunk -->
+<line x1="680" y1="836" x2="680" y2="854" class="a-main"/>
 
-  <!-- Skip arrow from s2 to FusionUp2 -->
-  <path d="M 1300,505 L 1380,505 L 1380,940 L 880,940" class="arrow-g"/>
-  <text x="1240" y="497" class="shape" fill="#5A8E4C">skip s2 [B, 96, 112, 112]</text>
+<!-- Shared decoder trunk -->
+<rect x="530" y="854" width="300" height="50" rx="8" class="shared"/>
+<text x="680" y="874" text-anchor="middle" class="t-blk">Shared Decoder Trunk</text>
+<text x="680" y="892" text-anchor="middle" class="t-shape">[B, 32, 448, 448]</text>
 
-  <line x1="690" y1="972" x2="690" y2="996" class="arrow"/>
+<!-- ═══════════════════════════════════════════════
+     TASK HEADS
+     ═══════════════════════════════════════════════ -->
 
-  <!-- FusionUp3 -->
-  <rect x="500" y="996" width="380" height="64" rx="8" class="fuse"/>
-  <text x="690" y="1019" text-anchor="middle" class="label">FusionUp 3   (112×112 → 224×224)</text>
-  <text x="690" y="1038" text-anchor="middle" class="sub">bilinear↑ • concat skip • ConvBlock(192→64)</text>
-  <text x="690" y="1054" text-anchor="middle" class="shape">→ [B, 64, 224, 224]</text>
+<!-- Fork from shared trunk -->
+<line x1="680" y1="904" x2="680" y2="922" class="a-fork"/>
+<path d="M 680,922 L 490,922 L 490,942" class="a-fork"/>
+<path d="M 680,922 L 870,922 L 870,942" class="a-fork"/>
+<circle cx="680" cy="922" r="3" fill="#444"/>
 
-  <!-- Skip arrow from s1 to FusionUp3 -->
-  <path d="M 1335,430 L 1420,430 L 1420,1028 L 880,1028" class="arrow-g"/>
-  <text x="1240" y="422" class="shape" fill="#5A8E4C">skip s1 [B, 64, 224, 224]</text>
+<!-- Mask Head -->
+<rect x="370" y="942" width="240" height="68" rx="8" class="head-box"/>
+<text x="490" y="962" text-anchor="middle" class="t-blk">Mask Head</text>
+<text x="490" y="978" text-anchor="middle" class="t-detail">1×1 Conv: 32 → 7</text>
+<text x="490" y="994" text-anchor="middle" class="t-detail">one sigmoid logit per class</text>
+<text x="490" y="1003" text-anchor="middle" class="t-detail">(no sigmoid inside model)</text>
 
-  <line x1="690" y1="1060" x2="690" y2="1084" class="arrow"/>
+<!-- Normal Head -->
+<rect x="750" y="942" width="240" height="68" rx="8" class="head-box"/>
+<text x="870" y="962" text-anchor="middle" class="t-blk">Normal Head</text>
+<text x="870" y="978" text-anchor="middle" class="t-detail">3×3 Conv (32→32) + 1×1 Conv (→3)</text>
+<text x="870" y="994" text-anchor="middle" class="t-detail">L2-normalize along channel dim</text>
+<text x="870" y="1003" text-anchor="middle" class="t-detail">(unit vectors)</text>
 
-  <!-- FusionUp4 -->
-  <rect x="500" y="1084" width="380" height="64" rx="8" class="fuse"/>
-  <text x="690" y="1107" text-anchor="middle" class="label">FusionUp 4   (224×224 → 448×448)</text>
-  <text x="690" y="1126" text-anchor="middle" class="sub">bilinear↑ • concat skip • ConvBlock(96→32)</text>
-  <text x="690" y="1142" text-anchor="middle" class="shape">→ [B, 32, 448, 448]</text>
+<!-- Arrows heads → outputs -->
+<line x1="490" y1="1010" x2="490" y2="1026" class="a-main"/>
+<line x1="870" y1="1010" x2="870" y2="1026" class="a-main"/>
 
-  <!-- Skip arrow from s0 to FusionUp4 -->
-  <path d="M 1370,355 L 1460,355 L 1460,1116 L 880,1116" class="arrow-g"/>
-  <text x="1245" y="347" class="shape" fill="#5A8E4C">skip s0 [B, 32, 448, 448]</text>
+<!-- Outputs -->
+<rect x="362" y="1026" width="256" height="46" rx="7" class="out-box"/>
+<text x="490" y="1046" text-anchor="middle" class="t-blk">affordance_logits</text>
+<text x="490" y="1064" text-anchor="middle" class="t-shape">[B, 7, 448, 448]</text>
 
-  <line x1="690" y1="1148" x2="690" y2="1180" class="arrow"/>
+<rect x="742" y="1026" width="256" height="46" rx="7" class="out-box"/>
+<text x="870" y="1046" text-anchor="middle" class="t-blk">normal_pred</text>
+<text x="870" y="1064" text-anchor="middle" class="t-shape">[B, 3, 448, 448]  unit vectors</text>
 
-  <!-- Shared trunk output -->
-  <rect x="540" y="1180" width="300" height="48" rx="8" class="neck"/>
-  <text x="690" y="1199" text-anchor="middle" class="label">Shared decoder output</text>
-  <text x="690" y="1218" text-anchor="middle" class="shape">[B, 32, 448, 448]</text>
+<!-- Arrows outputs → losses -->
+<line x1="490" y1="1072" x2="490" y2="1088" class="a-thin"/>
+<line x1="870" y1="1072" x2="870" y2="1088" class="a-thin"/>
 
-  <!-- Split to heads -->
-  <line x1="690" y1="1228" x2="690" y2="1250" class="arrow"/>
-  <path d="M 690,1250 L 470,1250 L 470,1280" class="arrow-r"/>
-  <path d="M 690,1250 L 910,1250 L 910,1280" class="arrow-r"/>
+<!-- Loss boxes -->
+<rect x="352" y="1088" width="276" height="46" rx="7" class="loss-box"/>
+<text x="490" y="1108" text-anchor="middle" class="t-blk">DiceBCELoss  (per-channel)</text>
+<text x="490" y="1125" text-anchor="middle" class="t-detail">BCEWithLogits + soft Dice  ·  class weights</text>
 
-  <!-- ============ HEADS ============ -->
-  <rect x="320" y="1280" width="300" height="80" rx="8" class="head"/>
-  <text x="470" y="1305" text-anchor="middle" class="label">Mask Head</text>
-  <text x="470" y="1325" text-anchor="middle" class="sub">1×1 Conv (32 → 1)</text>
-  <text x="470" y="1345" text-anchor="middle" class="sub">RAW LOGITS (no sigmoid)</text>
+<rect x="732" y="1088" width="276" height="46" rx="7" class="loss-box"/>
+<text x="870" y="1108" text-anchor="middle" class="t-blk">Cosine + Edge Smoothness</text>
+<text x="870" y="1125" text-anchor="middle" class="t-detail">masked cosine  +  ∇N · exp(−|∇RGB|)</text>
 
-  <rect x="760" y="1280" width="300" height="80" rx="8" class="head"/>
-  <text x="910" y="1305" text-anchor="middle" class="label">Normal Head</text>
-  <text x="910" y="1325" text-anchor="middle" class="sub">3×3 Conv → BN+ReLU → 1×1 Conv (→ 3)</text>
-  <text x="910" y="1345" text-anchor="middle" class="sub">L2-normalize along channels</text>
+<!-- L_total -->
+<text x="690" y="1152" text-anchor="middle" font-size="13" font-weight="600" fill="#333">
+  L  =  L<tspan font-size="10" dy="3">mask</tspan><tspan dy="-3">  +  5.0 · L</tspan><tspan font-size="10" dy="3">normal</tspan><tspan dy="-3">  +  0.5 · L</tspan><tspan font-size="10" dy="3">smooth</tspan>
+</text>
 
-  <line x1="470" y1="1360" x2="470" y2="1388" class="arrow"/>
-  <line x1="910" y1="1360" x2="910" y2="1388" class="arrow"/>
+<!-- ═══ LEGEND ═══ -->
+<g transform="translate(28, 990)">
+  <text x="0" y="0" class="t-col">LEGEND</text>
+  <rect x="0"  y="8"  width="16" height="12" rx="3" class="frozen"/>    <text x="22" y="19" class="t-detail">Frozen (DINOv2)</text>
+  <rect x="0"  y="26" width="16" height="12" rx="3" class="trainable"/> <text x="22" y="37" class="t-detail">Trainable · spatial</text>
+  <rect x="0"  y="44" width="16" height="12" rx="3" class="fusion"/>    <text x="22" y="55" class="t-detail">Trainable · fusion</text>
+  <rect x="0"  y="62" width="16" height="12" rx="3" class="head-box"/>  <text x="22" y="73" class="t-detail">Task head</text>
+  <rect x="0"  y="80" width="16" height="12" rx="3" class="loss-box"/>  <text x="22" y="91" class="t-detail">Loss term</text>
+  <line x1="0" y1="104" x2="16" y2="104" stroke="#2A64A0" stroke-width="1.8" marker-end="url(#ah-blue)"/>
+  <text x="22" y="108" class="t-detail">ViT feature flow</text>
+  <line x1="0" y1="120" x2="16" y2="120" stroke="#367A28" stroke-width="1.8" stroke-dasharray="5,3" marker-end="url(#ah-green)"/>
+  <text x="22" y="124" class="t-detail">Skip connection</text>
+</g>
 
-  <!-- Output tensors -->
-  <rect x="340" y="1388" width="260" height="50" rx="8" class="out"/>
-  <text x="470" y="1410" text-anchor="middle" class="label">mask_logits</text>
-  <text x="470" y="1428" text-anchor="middle" class="shape">[B, 1, 448, 448]  float32</text>
-
-  <rect x="780" y="1388" width="260" height="50" rx="8" class="out"/>
-  <text x="910" y="1410" text-anchor="middle" class="label">normal_pred</text>
-  <text x="910" y="1428" text-anchor="middle" class="shape">[B, 3, 448, 448]  unit vectors</text>
-
-  <!-- losses -->
-  <line x1="470" y1="1438" x2="470" y2="1466" class="arrow"/>
-  <line x1="910" y1="1438" x2="910" y2="1466" class="arrow"/>
-
-  <rect x="320" y="1466" width="300" height="58" rx="8" class="loss"/>
-  <text x="470" y="1488" text-anchor="middle" class="label">DiceBCELoss</text>
-  <text x="470" y="1508" text-anchor="middle" class="sub">BCEWithLogits + soft Dice</text>
-
-  <rect x="760" y="1466" width="300" height="58" rx="8" class="loss"/>
-  <text x="910" y="1488" text-anchor="middle" class="label">Masked Cosine + Edge Smoothness</text>
-  <text x="910" y="1508" text-anchor="middle" class="sub">cosine over GT mask  +  ∇N · exp(−|∇RGB|)</text>
-
-  <!-- L_total annotation -->
-  <text x="690" y="1560" text-anchor="middle" class="label">L_total  =  L_mask  +  5.0 · L_normal  +  0.5 · L_smooth</text>
-
-  <!-- ============ LEGEND ============ -->
-  <g transform="translate(60, 1480)">
-    <text x="0" y="0" class="group-title">LEGEND</text>
-
-    <rect x="0"  y="10" width="20" height="14" class="vit"/>
-    <text x="28" y="22" class="sub">Frozen ViT</text>
-
-    <rect x="0"  y="32" width="20" height="14" class="rgb"/>
-    <text x="28" y="44" class="sub">RGB Stem (trainable)</text>
-
-    <rect x="0"  y="54" width="20" height="14" class="fuse"/>
-    <text x="28" y="66" class="sub">Decoder fusion</text>
-
-    <rect x="0"  y="76" width="20" height="14" class="head"/>
-    <text x="28" y="88" class="sub">Task head</text>
-
-    <rect x="0"  y="98" width="20" height="14" class="loss"/>
-    <text x="28" y="110" class="sub">Loss term</text>
-
-    <line x1="0" y1="124" x2="22" y2="124" class="arrow"/>
-    <text x="28" y="128" class="sub">Forward flow</text>
-
-    <line x1="0" y1="142" x2="22" y2="142" class="arrow-g"/>
-    <text x="28" y="146" class="sub">Skip connection</text>
-  </g>
 </svg>

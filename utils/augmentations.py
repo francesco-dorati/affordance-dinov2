@@ -112,7 +112,15 @@ class JointTrainTransform:
             normals, M, (W, H),
             flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0,
         )
-        normals = _rotate_normals(normals, angle)
+        # cv2.getRotationMatrix2D rotates the image counter-clockwise visually,
+        # but the normals' (x, y) components live in pixel-aligned camera
+        # coordinates where y points DOWN (Y = (v - cy) * Z / fy). In a y-down
+        # frame, a visually counter-clockwise rotation is R(-theta) in the
+        # standard math convention used by _rotate_normals, so the vector
+        # rotation must use the NEGATED angle. Verified numerically in
+        # tests/test_normal_rotation.py: with +angle the supervision error
+        # grows to ~2x the un-rotated error; with -angle it drops to <0.2 deg.
+        normals = _rotate_normals(normals, -angle)
 
         # -------- Geometric: horizontal flip --------
         if random.random() < self.p_hflip:

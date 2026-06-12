@@ -22,6 +22,7 @@ Run:
 
 import sys
 import json
+import math
 import time
 import argparse
 import numpy as np
@@ -52,6 +53,8 @@ from utils.losses import (
     angle_error_degrees,
     iou,
     iou_per_class,
+    iou_accumulate,
+    iou_from_accumulated,
 )
 from utils.training_logger import JSONLLogger
 
@@ -66,6 +69,14 @@ def get_args():
     p.add_argument('--epochs',     type=int,   default=25)
     p.add_argument('--batch_size', type=int,   default=8)
     p.add_argument('--lr',         type=float, default=1e-4)
+    p.add_argument('--cosine', action=BooleanOptionalAction, default=True,
+                   help="Cosine-decay the learning rate from --lr to ~0 over "
+                        "the run (after warmup). ON by default; pass "
+                        "--no-cosine for the old constant-LR behaviour.")
+    p.add_argument('--warmup_epochs', type=int, default=2,
+                   help="Linear LR warmup epochs before the cosine decay. "
+                        "Protects the randomly-initialised decoder and fresh "
+                        "BatchNorm statistics from large early steps.")
     p.add_argument('--w_normal',   type=float, default=5.0)
     p.add_argument('--w_smooth',   type=float, default=0.5)
     p.add_argument('--no_augment', action='store_true')
@@ -89,6 +100,21 @@ def get_args():
 # =====================================================================
 # 2. Helpers
 # =====================================================================
+def lr_at_epoch(epoch: int, total_epochs: int, base_lr: float,
+                warmup_epochs: int, cosine: bool) -> float:
+    """Per-epoch learning rate: linear warmup, then cosine decay to ~0.
+
+    Computed purely from the epoch index so it is trivially --resume-safe
+    (no scheduler state to checkpoint).
+    """
+    if warmup_epochs > 0 and epoch < warmup_epochs:
+        return base_lr * (epoch + 1) / warmup_epochs
+    if not cosine:
+        return base_lr
+    t = (epoch - warmup_epochs) / max(1, total_epochs - warmup_epochs)
+    return base_lr * 0.5 * (1.0 + math.cos(math.pi * min(t, 1.0)))
+
+
 def get_or_compute_class_weights(dataset, train_idx, cache_path,
                                  weight_power: float, weight_clip: float):
     """Scan training labels once (caching the result), then derive a per-class
@@ -140,6 +166,11 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
     # poison the average for a given epoch.
     iou_c_sum = [0.0] * N_AFFORDANCE_CLASSES
     iou_c_n   = [0]   * N_AFFORDANCE_CLASSES
+    # Dataset-level IoU: accumulate intersection/union pixel counts over the
+    # whole split, divide once at the end. Batch-size invariant; this is the
+    # number used for best-checkpoint selection.
+    inter_sum = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
+    union_sum = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
     with torch.no_grad():
         for batch in loader:
             rgb        = batch['rgb'].to(device)
@@ -156,6 +187,9 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
             sums['loss_mask']   += l_mask.item()
             sums['loss_normal'] += l_norm.item()
             sums['iou']         += iou(mask_logits, gt_mask)
+            b_inter, b_union = iou_accumulate(mask_logits, gt_mask)
+            inter_sum += b_inter
+            union_sum += b_union
             for c, v in enumerate(iou_per_class(mask_logits, gt_mask)):
                 if v is not None:
                     iou_c_sum[c] += v
@@ -170,6 +204,8 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
         (iou_c_sum[c] / iou_c_n[c]) if iou_c_n[c] > 0 else None
         for c in range(N_AFFORDANCE_CLASSES)
     ]
+    out['iou_dataset'], out['iou_dataset_per_class'] = \
+        iou_from_accumulated(inter_sum, union_sum)
     return out
 
 
@@ -234,7 +270,12 @@ def main():
     mask_loss_fn = DiceBCELoss(pos_weight=pos_weight)
 
     # ---- Resume ----
-    start_epoch, best_val = 0, float('inf')
+    # best.pth is selected on val DATASET-LEVEL mean-IoU (the reported
+    # metric), not val loss: the loss mixes class-weighted BCE and the
+    # 5x-weighted normal term, so its minimum need not coincide with the
+    # best segmentation. best_val (loss) is still tracked for logging and
+    # for resuming from pre-change checkpoints.
+    start_epoch, best_val, best_miou = 0, float('inf'), -1.0
     last_ckpt = CKPT_DIR / "last.pth"
     if args.resume and last_ckpt.exists():
         ck = torch.load(last_ckpt, map_location=DEVICE)
@@ -242,7 +283,9 @@ def main():
         optimizer.load_state_dict(ck['optim'])
         start_epoch = ck['epoch'] + 1
         best_val = ck['best_val']
-        print(f"Resumed at epoch {start_epoch}  | best val {best_val:.4f}")
+        best_miou = ck.get('best_miou', -1.0)  # absent in older checkpoints
+        print(f"Resumed at epoch {start_epoch}  | best val {best_val:.4f} "
+              f"| best mIoU {best_miou:.4f}")
 
     # ---- Update run_config now that weights are known ----
     if weights_record is not None:
@@ -260,6 +303,12 @@ def main():
     # ---- Loop ----
     try:
         for epoch in range(start_epoch, args.epochs):
+            # ---- LR schedule (warmup + cosine, resume-safe) ----
+            epoch_lr = lr_at_epoch(epoch, args.epochs, args.lr,
+                                   args.warmup_epochs, args.cosine)
+            for g in optimizer.param_groups:
+                g['lr'] = epoch_lr
+
             # ---- TRAIN ----
             decoder.train()
             t0 = time.time()
@@ -335,27 +384,34 @@ def main():
                        loss_mask=val_metrics['loss_mask'],
                        loss_normal=val_metrics['loss_normal'],
                        iou=val_metrics['iou'],
+                       iou_dataset=val_metrics['iou_dataset'],
                        iou_per_class=val_metrics['iou_per_class'],
+                       iou_dataset_per_class=val_metrics['iou_dataset_per_class'],
                        angle_deg=val_metrics['angle_deg'],
                        duration_s=val_dur,
                        n_batches=val_metrics['n'])
 
-            print(f"E{epoch+1} | "
+            print(f"E{epoch+1} | lr {epoch_lr:.2e} | "
                   f"Train L {train_metrics['loss']:.4f} IoU {train_metrics['iou']:.3f} Ang {train_metrics['angle_deg']:.2f}° "
-                  f"| Val L {val_metrics['loss']:.4f} IoU {val_metrics['iou']:.3f} Ang {val_metrics['angle_deg']:.2f}°")
+                  f"| Val L {val_metrics['loss']:.4f} IoU {val_metrics['iou']:.3f} "
+                  f"dIoU {val_metrics['iou_dataset']:.3f} Ang {val_metrics['angle_deg']:.2f}°")
 
             # ---- SAVE ----
-            torch.save({'epoch': epoch, 'model': decoder.state_dict(),
-                        'optim': optimizer.state_dict(), 'best_val': best_val},
-                       last_ckpt)
             if val_metrics['loss'] < best_val:
-                best_val = val_metrics['loss']
+                best_val = val_metrics['loss']  # tracked for logging only
+            if val_metrics['iou_dataset'] > best_miou:
+                best_miou = val_metrics['iou_dataset']
                 torch.save(decoder.state_dict(), CKPT_DIR / "best.pth")
                 logger.log(event="best", epoch=epoch + 1,
                            val_loss=val_metrics['loss'],
                            val_iou=val_metrics['iou'],
+                           val_iou_dataset=val_metrics['iou_dataset'],
                            val_angle_deg=val_metrics['angle_deg'])
-                print("   new best saved")
+                print("   new best saved (val dataset mIoU)")
+            torch.save({'epoch': epoch, 'model': decoder.state_dict(),
+                        'optim': optimizer.state_dict(), 'best_val': best_val,
+                        'best_miou': best_miou},
+                       last_ckpt)
 
         logger.log(event="end", epochs_completed=args.epochs,
                    best_val_loss=best_val)

@@ -28,7 +28,8 @@ sensor data alone, even for objects it has never been trained on. That is the
 "zero-shot" goal.
 
 The model takes one RGB image (and optionally depth) and produces two dense
-prediction maps — one for "is this pixel grabbable?" and one for "what
+prediction maps — one per affordance class ("is this pixel graspable /
+cuttable / containing / …?") and one for "what
 direction is the surface here pointing?". Combine those with a depth reading
 and you get a 6-DoF pose (3 positions + 3 orientations) that a motion planner
 can execute.
@@ -67,12 +68,12 @@ For one sample it produces a dictionary:
 | Key           | Shape                | Type    | Meaning                                              |
 |---------------|----------------------|---------|------------------------------------------------------|
 | `rgb`         | `[3, 448, 448]`      | float32 | RGB image, ImageNet-normalized                       |
-| `mask`        | `[1, 448, 448]`      | float32 | Binary ground-truth affordance mask (0 or 1)         |
+| `mask`        | `[7, 448, 448]`      | float32 | Multi-hot affordance mask — one binary channel per UMD class (`config.AFFORDANCE_CLASSES` order) |
 | `normals`     | `[3, 448, 448]`      | float32 | Ground-truth surface normals as unit vectors         |
 | `tool_name`   | (string)             | str     | Name of the source tool, kept for per-tool reporting |
 
 The `DataLoader` then stacks N samples to add the batch dimension, so the
-model actually sees `[B, 3, 448, 448]`, `[B, 1, 448, 448]`, etc.
+model actually sees `[B, 3, 448, 448]`, `[B, 7, 448, 448]`, etc.
 
 **Why ImageNet-normalized?** Because the backbone (DINOv2) was trained with
 images normalized using `mean = [0.485, 0.456, 0.406]` and
@@ -263,16 +264,21 @@ After `up4`, we have a single feature map at the full input resolution: a
 The shared trunk now splits into two specialized heads. Each tries to predict
 a different thing from the same shared features.
 
-### 6.1 Mask head — affordance probability
+### 6.1 Mask head — multi-label affordance probabilities
 
 | Step  | Operation               | Output                       |
 |-------|-------------------------|------------------------------|
-| 6.1   | 1×1 Conv (32 → 1)       | `mask_logits`  `[B, 1, 448, 448]` |
+| 6.1   | 1×1 Conv (32 → 7)       | `mask_logits`  `[B, 7, 448, 448]` |
 
-**Output type:** raw *logits* — unbounded real numbers. To convert to a
-probability you apply `torch.sigmoid(mask_logits)`, which maps any real
-number into (0, 1). The training loss does this internally for numerical
-stability, so we do *not* apply sigmoid inside the model.
+One output channel per UMD affordance class, in `config.AFFORDANCE_CLASSES`
+order. The channels are **independent** (multi-label, not softmax): a pixel
+can legitimately belong to several affordances at once — a mug rim is both
+`grasp` and borders `contain`.
+
+**Output type:** raw *logits* — unbounded real numbers. To convert each
+channel to a probability you apply `torch.sigmoid(mask_logits)`, which maps
+any real number into (0, 1). The training loss does this internally for
+numerical stability, so we do *not* apply sigmoid inside the model.
 
 ### 6.2 Normal head — 3D orientation
 
@@ -405,7 +411,7 @@ target. There are four small steps:
 | Step    | What you do                                                                                                       |
 |---------|-------------------------------------------------------------------------------------------------------------------|
 | 1       | `prob = torch.sigmoid(mask_logits)` — turn logits into probabilities                                              |
-| 2       | Binarize: `mask = prob > 0.5`. Optional: keep only the largest connected component.                              |
+| 2       | Pick the affordance channel the task needs (e.g. `grasp`), binarize: `mask = prob[c] > 0.5`. Optional: keep only the largest connected component.  |
 | 3       | Compute the 2D centroid `(u, v)` of the binary mask in pixel coordinates.                                         |
 | 4       | Lookup depth: `Z = depth[v, u]` in meters. Back-project: `X = (u − cx) · Z / fx`, `Y = (v − cy) · Z / fy`.        |
 | 5       | Lookup the predicted normal at that pixel: `(Nx, Ny, Nz) = normal_pred[:, v, u]`.                                |
@@ -461,7 +467,7 @@ Decoder
   FusionUp4   + skip s0        [B, 32, 448, 448]
 
 Heads
-  mask_head    (1×1 Conv)      mask_logits  [B, 1, 448, 448]   (logits)
+  mask_head    (1×1 Conv)      mask_logits  [B, 7, 448, 448]   (logits, one channel per affordance class)
   normal_head  (3×3 + 1×1)     normal_pred  [B, 3, 448, 448]   (unit vectors)
 ```
 

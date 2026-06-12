@@ -1,9 +1,11 @@
 {
-  "resume": true,
+  "resume": false,
   "use_drive": false,
-  "epochs": 40,
+  "epochs": 1,
   "batch_size": 8,
   "lr": 0.0001,
+  "cosine": true,
+  "warmup_epochs": 2,
   "w_normal": 5.0,
   "w_smooth": 0.5,
   "no_augment": false,

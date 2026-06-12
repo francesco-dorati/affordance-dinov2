@@ -134,6 +134,41 @@ def iou(logits, target, thresh: float = 0.5):
     return float(sum(valid) / len(valid))
 
 
+def iou_accumulate(logits, target, thresh: float = 0.5):
+    """Per-class intersection and union pixel sums for one batch.
+
+    Building block for DATASET-LEVEL IoU: sum these over all batches of a
+    split, then divide once with `iou_from_accumulated`. Unlike averaging
+    per-batch IoUs, the result is invariant to batch size and sample order,
+    and batches where a class covers few pixels are weighted by their actual
+    area instead of counting as much as area-rich batches.
+
+    Returns:
+        inter: [C] tensor — per-class intersection pixel counts.
+        union: [C] tensor — per-class union pixel counts.
+    """
+    pred = (torch.sigmoid(logits) > thresh).float()
+    dims = (0, 2, 3)  # batch + spatial — keep channels separate
+    inter = (pred * target).sum(dim=dims)
+    union = pred.sum(dim=dims) + target.sum(dim=dims) - inter
+    return inter, union
+
+
+def iou_from_accumulated(inter_sum, union_sum):
+    """Final dataset-level IoU from accumulated per-class sums.
+
+    Returns:
+        mean_iou:  float — mean over classes with non-zero union (or 0.0).
+        per_class: list of float-or-None (None = class absent in the split).
+    """
+    per_class = []
+    for i, u in zip(inter_sum.tolist(), union_sum.tolist()):
+        per_class.append((i / u) if u > 0 else None)
+    valid = [v for v in per_class if v is not None]
+    mean_iou = float(sum(valid) / len(valid)) if valid else 0.0
+    return mean_iou, per_class
+
+
 def iou_per_class(logits, target, thresh: float = 0.5):
     """Returns a list of per-class IoU floats (or None for absent classes).
 

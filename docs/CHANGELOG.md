@@ -118,6 +118,63 @@ exposed three failure modes documented in `RESULTS.md` §4: `grasp`
 over-activation on textured backgrounds, conservative `contain` extent on
 oblique viewing angles, and complete failure on transparent objects.
 
+---
+
+## Bugfix — normal-rotation sign in augmentation (June 2026)
+
+### Motivation
+
+A code review found that `JointTrainTransform` rotated the normal vectors by
++theta while the image warp (`cv2.getRotationMatrix2D`, counter-clockwise
+visually) corresponds to a −theta vector rotation in the y-down pixel-aligned
+camera frame the normals are expressed in (`Y = (v − cy) · Z / fy`). Every
+rotated training sample carried up to ~2·theta of angular supervision error —
+up to 30° at the ±15° augmentation limit, and worse than applying no vector
+rotation at all.
+
+### Change
+
+One-line fix in `utils/augmentations.py`: the call site now passes `-angle`
+to `_rotate_normals`, with a comment explaining the coordinate convention.
+New `tests/test_normal_rotation.py` verifies the fix against ground-truth
+normals recomputed from a rotated synthetic depth map: pre-fix error 3.7° /
+7.5° / 11.1° at theta = 5° / 10° / 15°; post-fix < 0.2°.
+
+### Consequences
+
+Mask supervision was never affected. Existing checkpoints remain loadable
+but their normal head was trained on partially-corrupted supervision;
+retraining (full or fine-tune from `best.pth`) is required to realise the
+angular-error improvement. Horizontal-flip handling (negate x) was checked
+and is correct.
+
+---
+
+## Training and evaluation updates for the final run (June 2026)
+
+Three low-risk changes bundled ahead of the final retrain:
+
+**Cosine LR schedule with warmup** (`scripts/train.py`). LR now ramps
+linearly over `--warmup_epochs` (default 2) then cosine-decays from `--lr`
+to ~0 over the run. Computed per epoch from the epoch index, so `--resume`
+needs no scheduler state. Disable with `--no-cosine`. Motivation: the
+40-epoch constant-LR run peaked at epoch 15 and oscillated afterwards.
+
+**Best-checkpoint selection on val dataset-level mean-IoU** (was: val
+loss). The val loss mixes class-weighted BCE and the 5x-weighted normal
+term, so its minimum need not coincide with the best segmentation.
+`last.pth` now stores `best_miou` alongside the legacy `best_val`; resuming
+from older checkpoints works (missing key defaults to −1, so the first
+post-resume epoch re-establishes the baseline).
+
+**Dataset-level IoU** (`utils/losses.py`: `iou_accumulate` /
+`iou_from_accumulated`). Intersection and union pixel counts are accumulated
+over the full split and divided once — batch-size invariant, every pixel
+weighted equally — versus the previous mean of per-batch IoUs.
+`history.jsonl` val rows gain `iou_dataset` and `iou_dataset_per_class`;
+`evaluation_<split>.json` gains `overall_dataset` and `per_class_dataset`.
+Both aggregations are reported for continuity with earlier comparisons.
+
 ### Default: frequency-inverse class weights
 
 After evaluation of the first 25-epoch run revealed strong minority-class

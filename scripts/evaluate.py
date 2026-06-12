@@ -46,6 +46,7 @@ from config import (
 from models.backbone import DINOv2Backbone
 from models.decoder import MultiTaskDecoder
 from utils.dataset import UMDAffordanceDataset, instance_split
+from utils.losses import iou_accumulate, iou_from_accumulated
 
 
 # =====================================================================
@@ -165,6 +166,14 @@ def main():
     per_sample = []   # list of dicts
     per_sample_iou_class = {t: [] for t in IOU_THRESHOLDS}  # list of np.ndarray [C]
     per_sample_tool = []
+    # Dataset-level IoU: accumulate per-class intersection/union pixel counts
+    # over the whole split and divide once at the end. Unlike the per-sample
+    # mean, this is invariant to batch size / sample order and weights every
+    # pixel equally. Both aggregations are reported.
+    inter_sums = {t: torch.zeros(N_AFFORDANCE_CLASSES, device=DEVICE)
+                  for t in IOU_THRESHOLDS}
+    union_sums = {t: torch.zeros(N_AFFORDANCE_CLASSES, device=DEVICE)
+                  for t in IOU_THRESHOLDS}
     t0 = time.time()
     with torch.no_grad():
         for batch in tqdm(loader, desc="evaluate"):
@@ -180,6 +189,10 @@ def main():
                 t: batch_iou_per_class(mask_logits, gt_mask, t)  # [B, C]
                 for t in IOU_THRESHOLDS
             }
+            for t in IOU_THRESHOLDS:
+                b_inter, b_union = iou_accumulate(mask_logits, gt_mask, thresh=t)
+                inter_sums[t] += b_inter
+                union_sums[t] += b_union
             angle_rows = batch_angle_stats(pred_normals, gt_normals, gt_mask)
 
             B = rgb.shape[0]
@@ -213,6 +226,16 @@ def main():
     overall['angle_deg_mean'] = _avg('angle_deg_mean')
     for b in ANGLE_BINS_DEG:
         overall[f'frac_le_{b}'] = _avg(f'frac_le_{b}')
+
+    # ---- Aggregate (dataset-level IoU) ----
+    overall_dataset = {}
+    per_class_dataset = {}
+    for t in IOU_THRESHOLDS:
+        mean_iou, per_class = iou_from_accumulated(inter_sums[t], union_sums[t])
+        overall_dataset[f'iou@{t:.1f}'] = mean_iou
+        per_class_dataset[f'iou@{t:.1f}'] = {
+            cls: v for cls, v in zip(AFFORDANCE_CLASSES, per_class)
+        }
 
     # ---- Aggregate (per affordance class, overall) ----
     # Stack into [N, C] then nan-mean over samples.
@@ -265,7 +288,9 @@ def main():
         'affordance_classes': list(AFFORDANCE_CLASSES),
         'elapsed_s': elapsed,
         'overall': overall,
+        'overall_dataset': overall_dataset,
         'per_class_overall': per_class_overall,
+        'per_class_dataset': per_class_dataset,
         'per_tool': per_tool_summary,
     }
     out_path = out_dir / f"evaluation_{args.split}.json"
@@ -273,18 +298,21 @@ def main():
         json.dump(report, f, indent=2)
 
     # ---- Console summary ----
-    print("\n=== OVERALL (mean-IoU across affordance classes) ===")
+    print("\n=== OVERALL mean-IoU (per-sample mean | dataset-level) ===")
     for t in IOU_THRESHOLDS:
-        print(f"  IoU @ {t:.1f} : {overall[f'iou@{t:.1f}']:.4f}")
+        print(f"  IoU @ {t:.1f} : {overall[f'iou@{t:.1f}']:.4f} | "
+              f"{overall_dataset[f'iou@{t:.1f}']:.4f}")
     print(f"  Mean angular error : {overall['angle_deg_mean']:.2f}°")
     for b in ANGLE_BINS_DEG:
         print(f"  Fraction <= {b:>5.2f}° : {overall[f'frac_le_{b}']:.3f}")
 
-    print("\n=== PER AFFORDANCE CLASS (IoU @ 0.5) ===")
+    print("\n=== PER AFFORDANCE CLASS, IoU @ 0.5 (per-sample mean | dataset-level) ===")
     for cls in AFFORDANCE_CLASSES:
         v = per_class_overall['iou@0.5'][cls]
+        d = per_class_dataset['iou@0.5'][cls]
         v_str = "  n/a" if v is None else f"{v:.4f}"
-        print(f"  {cls:12s} : {v_str}")
+        d_str = "  n/a" if d is None else f"{d:.4f}"
+        print(f"  {cls:12s} : {v_str} | {d_str}")
     print(f"\nFull report written to: {out_path}")
 
 
