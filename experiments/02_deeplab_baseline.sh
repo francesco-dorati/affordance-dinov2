@@ -9,8 +9,8 @@
 # for the DINOv2 model only, so the baseline scores itself).
 #
 # RESUMABLE: re-run to continue from <OUT>/last.pth.
-# NOTE: ResNet-50 full fine-tune is memory-heavy. --batch_size 4 is a safe
-# default for a 12 GB 5070; bump to 8 if it fits.
+# NOTE: ResNet-50 full fine-tune is memory-heavy. --batch_size 8 suits a 24 GB
+# card (RunPod 4090/3090) and is better for BatchNorm; drop to 4 on a 12 GB GPU.
 #
 #     bash experiments/02_deeplab_baseline.sh
 
@@ -26,7 +26,7 @@ mkdir -p "$OUT"
 echo "=== [02] DeepLabv3 baseline -> $OUT ==="
 python scripts/train_baseline.py \
     --epochs 40 \
-    --batch_size 4 \
+    --batch_size 8 \
     --split_type novel_instance \
     --output_dir "$OUT" \
     --resume
