@@ -236,13 +236,15 @@ def dump_samples(checkpoint_path, output_dir, n_samples, seed):
     )
     from models.backbone import DINOv2Backbone
     from models.decoder import MultiTaskDecoder
-    from utils.dataset import UMDAffordanceDataset, instance_split
+    from utils.dataset import UMDAffordanceDataset, make_split
 
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
     ds = UMDAffordanceDataset(raw_dir=RAW_TOOLS,
                               intrinsics=TRAIN_INTRINSICS, augment=False)
-    _, val_idx = instance_split(ds, seed=42, val_frac=0.2)
+    # Match training's canonical split so the visualized val samples are the
+    # same ones the model was held out on.
+    _, val_idx = make_split(ds, split_type="novel_instance", seed=42, val_frac=0.2)
     rng = random.Random(seed)
     picks = rng.sample(val_idx, k=min(n_samples, len(val_idx)))
 

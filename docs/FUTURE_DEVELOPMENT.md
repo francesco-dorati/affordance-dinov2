@@ -1,81 +1,102 @@
 # Future Development Roadmap
 
-This document captures the direction for the project beyond its current state. It serves two audiences at once: the Computer Vision course (where the deliverable is a final report on what was built and evaluated) and the humanoid robotics startup (where the model is a perception primitive inside a larger manipulation stack). Phases are ordered by dependency and by return on effort, not by ambition. Earlier phases must be completed before later phases will give meaningful signal.
+This roadmap reorganizes the project's forward path around two coupled goals: turning the affordance model into a **real VLA skill** (a perception primitive a vision-language-action stack can call) and making the work **publishable** at a peer-reviewed venue. The two goals share most of the same work — the VLA framing is the paper's novelty, and the paper's rigor is what makes the skill credible. Steps are ordered by dependency. Each is described in a few lines; see `RESULTS.md` for current numbers and the failure-mode evidence that motivates them.
+
+## Goals
+
+- **VLA skill:** the model is a callable, swappable perception primitive — given an image (or an image + a language goal), it returns per-object affordance heatmaps + surface normals that a planner or VLA consumes to choose a grasp.
+- **Publishable:** a sharp novel claim, an honest benchmark against external baselines, ablations, a robustness study, and a demonstration of the VLA integration.
 
 ## Current State (June 2026)
 
-The project is a DINOv2 ViT-Small backbone (frozen) feeding a DPT-style multi-scale fusion into a multi-task decoder that predicts a **7-channel multi-label affordance mask** plus surface normals on the UMD Part Affordance Dataset (single-object split). Phases 0, 1, and a partial Phase 2 are complete. The codebase supervises every UMD affordance class simultaneously (`grasp`, `cut`, `scoop`, `contain`, `pound`, `support`, `wrap-grasp`) with frequency-inverse per-class loss weights. Best checkpoint (epoch 15 of a 40-epoch class-weighted run) achieves val mean-IoU 0.7697 — a +0.057 improvement over the binary baseline on a strictly harder evaluation task, with five previously-invisible affordance classes now learned. See `RESULTS.md` for the full quantitative breakdown.
+Frozen DINOv2 ViT-Small backbone → DPT-style multi-scale fusion decoder → 7-channel multi-label affordance mask + 3-channel surface normals, trained on the UMD single-object split. Best checkpoint: val mean-IoU 0.7697, mean angular error 24.26°, +0.057 over the binary baseline. In-the-wild RGB inference on 21 phone photos done; dominant failure mode is `grasp` firing on wood-grain backgrounds. **Done:** Phase 0 (bowl/supervision-scope fix), Phase 1 (multi-class head + frequency-inverse class weights). **Partial:** Phase 2 (in-the-wild done; UMD clutter split not yet evaluated). Full detail in `RESULTS.md`.
 
-Earlier binary-mask checkpoints (val IoU 0.712 on the `grasp`+`wrap-grasp` union) are preserved in `archive/v2/checkpoints_binary/` for the before/after comparison plot but are not state-loadable into the current decoder, since the mask head output dimension changed from 1 to 7.
+---
 
-## Phase 0 — Data Inspection and Bowl Fix [DONE]
+## Pre-retrain tooling status (June 13, 2026)
 
-The bowl_02 and bowl_03 0.0-IoU result was diagnosed through `data_exploration.ipynb`: the dataset's binarisation line whitelisted only UMD class IDs 1 (`grasp`) and 7 (`wrap-grasp`). Bowls have neither — their only annotated affordance is class 4 (`contain`). The model was correctly predicting nothing for bowls because nothing was supervised. This is a supervision-scope finding, not a code bug, and the right resolution is the Phase 1 multi-class refactor below rather than a patch to the binarisation. For the course report, this slide motivates the architectural change cleanly: "we identified that a 2-class supervision target excluded several tool families from training; we expanded to all 7 UMD affordance classes."
+Before the scheduled retrain, the publish-blocking infrastructure was put in place so the single retrain produces directly-comparable, honest numbers:
 
-## Phase 1 — Multi-Class Affordance Head [DONE]
+- **Bug fixes verified live.** Normal-rotation `-angle` fix confirmed numerically (<0.2° vs 3.7–11.1° for the old `+angle`) in `tests/test_normal_rotation.py`; the unbiased dataset-level IoU accumulation (`iou_accumulate`/`iou_from_accumulated`) is the reported path in `evaluate.py`. Both are active for any new run.
+- **Canonical UMD splits implemented** (`utils/dataset.py`): `novel_instance` (Myers per-category instance holdout — the AffordanceNet Table II protocol; 80 train / 25 val tools, all 17 categories on both sides), `category` (whole-category holdout), and `file` (drop in official UMD split lists for exact comparability). Exposed via `--split_type` on `train.py` and `evaluate.py`; the exact assignment is written to `split_<type>.json` per run.
+- **Weighted F-measure implemented** (`utils/metrics.py`): Margolin et al. $F_\beta^\omega$, $\beta^2{=}0.3$ — the metric AffordanceNet reports. Integrated into `evaluate.py` (per-class + average, AffordanceNet-Table-II format); self-test passes.
 
-The decoder's mask head now outputs 7 sigmoid logits, one per UMD affordance class, in the order defined by `config.AFFORDANCE_CLASSES`. The dataset returns a (7, H, W) multi-hot tensor; augmentation runs on the raw multi-class label image first (with INTER_NEAREST to preserve class IDs) and the multi-hot expansion happens afterwards. The loss is per-channel BCE + per-channel soft Dice averaged over channels — multi-label, not softmax, because some regions legitimately serve multiple affordances. Per-class IoU is logged every epoch in `history.jsonl` and aggregated by `evaluate.py` into `per_class_overall` and `iou@0.5_per_class` per tool. Visualization shows one row of per-class GT heatmaps and one row of per-class predicted heatmaps so weak channels are immediately visible.
+What remains is to run the retrain on the canonical split and execute the baseline (below).
 
-Phase 1 was then extended with **frequency-inverse per-class loss weights** after the unweighted run revealed that rare classes (`support`, `scoop`, `pound`) had large train-val gaps despite reaching high train IoU. `pos_weight[c] = (N_neg / N_pos) ** 0.5`, clipped at 15.0; values cached in `checkpoints/class_pixel_counts.json`. ON by default; opt out with `--no-class_weights`. This lifted overall mean-IoU from 0.713 to 0.770 and made `support` learnable (val IoU 0.10 → 0.53) at the cost of slight noise on common classes. See `RESULTS.md` §2.3 for the empirical comparison.
+# Track A — Make it publishable
 
-## Phase 2 — Evaluation Beyond the Single-Object Split [PARTIAL]
+The minimum set of work that turns the current course project into a paper. Items A1–A2 are blocking (publish-or-perish quality gates); A3–A6 build the actual contribution.
 
-**In-the-wild RGB inference (21 phone-captured images): COMPLETE.** Results documented in `RESULTS.md` §4. Headline finding: predictions transfer cleanly *within object contours* on novel kitchenware, but the `grasp` channel exhibits substantial false-positive activation on wood-grain and textured backgrounds. `contain` underpredicts cavity extent on oblique viewing angles. Transparent objects fall outside the training distribution. These observations are the strongest motivation for Phase 3.
+## A1. Retrain on honest numbers [blocking — tooling done, run pending]
 
-**UMD clutter-split zero-shot evaluation: NOT YET DONE.** The UMD clutter tarball is present at `data/raw/Affordance Dataset Clutter.tar.gz` but has not been extracted or evaluated. The cleanest next step is to extract it, write a small adapter (`UMDClutterDataset` parallel to `UMDAffordanceDataset`), and run `evaluate.py` zero-shot on it. Expected outcome: substantially lower mean-IoU than the single-object split, with the gap quantifying the in-the-wild observations. This is a half-day of work and a strong addition for a final report.
+The current headline (val mean-IoU 0.7697, 24.26° normals) was produced with the normal-rotation sign bug and the biased per-batch IoU. Both are now fixed and verified; what's left is to **run** the retrain on the canonical split so the reported numbers come from the corrected path. Until that run lands, no current number is citable. ~Half a day of compute; everything downstream depends on it.
 
-The single-object training split has each tool isolated on a turntable with clean background, which is far easier than what a humanoid actually sees. UMD ships a clutter split with multiple objects per scene, occlusion, and varied backgrounds. The minimum credible step is zero-shot evaluation on this split with no retraining, reporting the generalization gap explicitly. This tells the course examiner that the limits of the model are understood, and it gives the startup a calibrated sense of how far the current checkpoint is from real-world deployment. Training on clutter is a larger project (the labels are often incomplete, so the loss must ignore unlabeled regions rather than treat them as negative) and is deferred to a later phase or to in-domain data collection from the robot itself.
+## A2. Standard benchmark protocol + external baseline [blocking]
 
-## Phase 3 — Per-Object Pipeline for Real Scenes
+The canonical comparison is **AffordanceNet (Do, Nguyen & Reid, ICRA 2018), UMD Table II**, metric $F_\beta^\omega$ ($\beta^2{=}0.3$), on the Myers et al. 2015 split — average **0.799**, with DeepLab **0.733** and ED-RGB **0.766** on the same split. The split + metric are now implemented, so: (1) report your retrained model's $F_\beta^\omega$ in that table's format; (2) **cite the published baseline numbers directly** (don't re-run AffordanceNet's Caffe code) once your split/metric match; (3) train one **DeepLabv3+** yourself on the same split as a same-code control — validated by reproducing DeepLab ≈0.733 (the trainer is now implemented at `scripts/train_baseline.py`). Note the architectural difference in the writeup (AffordanceNet is detection-based multiclass softmax; ours is pure segmentation, multi-label sigmoid, RGB-only, *plus* normals). A second dataset (IIT-AFF) strengthens it but is optional.
 
-The natural way to handle cluttered scenes is not to scale the model up to whole-scene inference. It is to factor the problem into find-objects, then predict-affordances-per-object. An open-vocabulary detector and segmenter (Grounding DINO plus SAM2, or OWL-ViT) handles instance segmentation in the wild and inherits internet-scale generalization. Each object mask is then cropped or used to gate the input, and the affordance model runs once per object. The output is a stack of per-object, per-affordance heatmaps plus surface normals, which a planner consumes to choose a grasp pose. This factored pipeline is what modern robotics stacks actually use because the components compose, each can be swapped independently, and the data requirements stay small. The current model fits directly into the middle slot with no retraining required once the multi-class head from Phase 1 is in place.
+## A3. Ablation table
 
-## Phase 4 — VLA Integration
+Run the ablations already implied by the architecture so each design choice is justified: with/without surface-normal head, with/without RGB skip connections, ViT-S vs ViT-B backbone, and the class-weight `pos_weight` cap. Several of these are currently marked "not separately ablated" — turning them into a table is the difference between an engineering writeup and a paper.
 
-A vision-language-action model gives the robot a high-level reasoner that parses instructions and orchestrates perception and action. There are three distinct ways the affordance model can live inside such a stack, and they are not mutually exclusive.
+## A4. Robustness study (clutter + in-the-wild)
 
-The first is as a tool the VLA calls. The VLA receives an instruction like "pour water into the mug", calls SAM2 and the affordance model on the current scene, receives back per-object contain heatmaps and surface normals, picks the right object, and hands the result to a grasp planner. The affordance model knows nothing about language; it is a perception primitive. This is the path of least resistance and matches how Pi-0, OpenVLA, and most current humanoid stacks are built. For the startup, this is the right first integration.
+Finish Phase 2: extract the already-downloaded UMD clutter tarball, write a small dataset adapter, and run the model zero-shot to get a quantitative generalization-gap number. Pair it with the existing qualitative in-the-wild failure-mode analysis. Together they give the paper an honest "where it breaks" section, which strong papers have and weak ones omit.
 
-The second is text-conditioned affordance prediction. Instead of a fixed seven-channel output, the head consumes a text embedding (from CLIP or a small language model) and produces a heatmap for whatever affordance the prompt describes. This is what RoboPoint, ManipLLM, and Affordance-LLM do, and it generalizes far beyond a fixed taxonomy. The architectural change is moderate (a FiLM-conditioned or cross-attention head replaces the 1×1 conv) but the data requirements are large: UMD's seven classes will not get you there, and the training data needs to come from web-scraped affordance descriptions or from a vision-language-model teacher labeling arbitrary prompts on your images. This is the startup's research moat. It is a six-month project, not a course extension.
+## A5. Sharpen the contribution statement
 
-The third is as a verification or safety layer behind the VLA. The VLA proposes a grasp; the affordance model independently scores whether that location actually has the right affordance and rejects unsafe proposals. Modern VLAs hallucinate grasps that do not physically make sense, and a dedicated affordance verifier in front of the actuators catches most of them. This is undervalued, gives a credible safety story for customers who care about reliability, and is a much smaller engineering lift than the text-conditioned approach.
+State the novelty explicitly rather than burying it: the multi-task affordance + surface-normal "grasp packet" as a single primitive, *and* its role as a callable VLA skill (Track B). The related-work section must situate the work against both affordance-segmentation and VLA literature. Without a one-sentence answer to "what's new?", the rest doesn't matter.
 
-## Phase 5 — Beyond the Course
+## A6. Write to venue format
 
-Several directions extend naturally once Phases 0 through 2 are complete. An RGB-D variant adds depth as an input channel and improves normal prediction substantially, which matters for grasp pose generation. An uncertainty head produces per-pixel confidence and lets the planner downweight ambiguous regions. Synthetic clutter augmentation (pasting segmented single-object tools onto random backgrounds) provides cheap multi-object training data, though the model can learn paste-boundary shortcuts and this is a warmup rather than a replacement for real clutter data. Partial unfreezing of the last two to four DINOv2 blocks at a low learning rate (around 1e-5) typically gives a small but real improvement once the decoder has converged. A temporal extension over short video clips (predict where the hand is about to grasp) is the next step toward a manipulation policy and is increasingly what affordance research is converging on.
+Draft in the target venue's template (LNCS for ECCV-family), with related work, method, the A2–A4 results, ablations, and a limitations section (material for which already exists in `RESULTS.md`). For a workshop paper this is 4–8 pages; confirm the specific workshop and its exact deadline before committing scope.
 
-## Near-Term Items Surfaced by the Current Results
+---
 
-Three lightweight items were promoted to the front of the backlog after the in-the-wild evaluation and the per-class analysis in `RESULTS.md`:
+# Track B — Make it a real VLA skill
 
-**Per-class inference thresholds.** A `--per_class_thresh "grasp:0.85,contain:0.4"` argument on `scripts/predict.py` would suppress wood-grain noise on the `grasp` channel and recover under-predicted cavity extent on the `contain` channel without retraining. This is a 10-line code change with substantial impact on visual quality of the in-the-wild predictions. Priority: high; complexity: trivial.
+Three integration patterns, ordered by effort. B1 is the smallest credible demonstration and is the right contribution for a near-term workshop paper. B2 and B3 are the longer research arc and the startup's moat.
 
-**Per-tool class priors at evaluation time.** The negative per-tool deltas in `RESULTS.md` §3.3 (scoop_01 −0.20, trowel_01 −0.22, trowel_04 −0.24) are measurement artifacts: the per-sample mean-IoU formula penalises predictions on absent classes. A small change to `evaluate.py` would let the per-tool aggregation skip channels that have zero positive pixels in any sample of that tool. Removes the artifact, makes the headline per-tool numbers reflect actual prediction quality. Priority: medium; complexity: small.
+## B1. Factored per-object pipeline [foundation]
 
-**UMD clutter-split zero-shot evaluation.** Already-downloaded tarball at `data/raw/Affordance Dataset Clutter.tar.gz`. Quantifies the qualitative observations from in-the-wild inference against a labelled benchmark. Priority: medium; complexity: half-day.
+Stop treating the model as whole-scene. Put an open-vocabulary segmenter (Grounding DINO + SAM2, or OWL-ViT) in front; run the affordance model once per detected object mask. This directly fixes the dominant wood-grain false-positive failure mode (background is never fed to the affordance head) and is the standard structure modern robotics stacks use. No retraining required — the current multi-class head drops straight in.
 
-## Model Improvement Backlog (June 2026 code review)
+## B2. The VLA verifier skill [smallest publishable VLA result]
 
-A full review of the architecture, losses, training loop, and augmentation pipeline surfaced the following items, ordered by expected return on effort. The architecture itself does not need redesigning; the headroom is in the backbone size, the optimisation schedule, loss calibration, and one supervision bug.
+The cheapest credible VLA integration: the VLA proposes a grasp, the affordance model independently scores whether that location actually has the requested affordance and rejects bad proposals. Gives a measurable headline result ("reduces VLA grasp hallucinations by X%"), a concrete safety/reliability story, and a real Track-A contribution — all without changing the model architecture. This is the recommended near-term VLA deliverable.
 
-**Normal-rotation sign bug — FIXED.** `JointTrainTransform` rotated the normal vectors by +theta while the image warp, in the y-down pixel-aligned camera frame the normals live in, corresponds to a vector rotation of −theta. Every rotated training sample therefore carried up to ~2·theta of angular supervision error (up to 30° at the ±15° augmentation limit) — likely a contributor to the 24° angular-error plateau. Verified numerically with a synthetic slanted-plane test (`tests/test_normal_rotation.py`): the pre-fix path measured 3.7° / 7.5° / 11.1° mean error at theta = 5° / 10° / 15° against recomputed ground truth, versus < 0.2° after the fix. Mask supervision was never affected (masks carry no vector components). Requires retraining to realise the gain.
+## B3. The VLA tool call
 
-**Bigger frozen backbone.** ViT-S is the smallest DINOv2 variant. Swapping to `dinov2_vitb14_reg` (or ViT-L) adds zero trainable parameters, and the register variants produce notably cleaner dense feature maps (non-register models contain artifact tokens that hurt dense prediction). The change is one hub string in `models/backbone.py` plus `embed_dim` 384 → 768. Likely the single cheapest large accuracy gain. Cost: GPU memory and ~2–3× backbone inference time.
+Wire the affordance model as a tool the VLA invokes: instruction in ("pour water into the mug") → VLA calls SAM2 + affordance model → gets per-object `contain` heatmaps + normals → picks the object → hands a grasp packet to the planner. The model stays language-agnostic. Matches how Pi-0 / OpenVLA stacks are built; the right first *product* integration for the startup even if the paper leans on B2.
 
-**Learning-rate schedule and checkpoint selection.** Training currently runs at a constant 1e-4 for 40 epochs; best val occurred at epoch 15 followed by oscillation — the classic signature of an LR that is too high late in training. Add cosine decay with a short warmup. Independently, select `best.pth` on val mean-IoU rather than val loss: the loss includes the heavily-weighted BCE term, which tracks IoU poorly. An exponential moving average of decoder weights is another near-free gain.
+## B4. Text-conditioned affordance head [research moat, long horizon]
 
-**Partial backbone unfreeze after decoder convergence.** The decoder has hit its expressive ceiling (`RESULTS.md` §6.7). Unfreeze the last 2–4 ViT blocks at ~1e-5 starting from the converged checkpoint, or use LoRA adapters on those blocks to bound overfitting risk. Promoted from Phase 5: this is the standard escape from exactly the plateau observed.
+Replace the fixed 7-channel output with a head conditioned on a text embedding (FiLM or cross-attention over a CLIP/LM embedding), producing a heatmap for whatever affordance the prompt names — the RoboPoint / ManipLLM / Affordance-LLM direction. This is the true "VLA skill" and the differentiating research bet, but UMD's 7 classes won't get you there: it needs web-scraped or VLM-teacher-labeled affordance data. A ~six-month project, not a course extension — target a 2027 venue (ICCV / CoRL / RSS) or ECCV 2028.
 
-**Loss calibration: the pos_weight cap is hurting precision.** Five of seven classes saturate the pos_weight clip at 15, so rare and merely-uncommon classes are uniformly over-weighted. Heavy pos_weight buys recall at the cost of precision — and the dominant in-the-wild failure mode (`grasp` firing on wood texture) is a precision failure. Options: lower the cap to ~5 and let the per-channel Dice term (already imbalance-robust) carry the rare classes, or replace weighted BCE with focal loss. Pair with the per-class inference thresholds already on the backlog.
+---
 
-**Negative supervision for backgrounds.** UMD contains no "textured surface that is not a handle" negatives, so no amount of UMD training fixes the wood-grain false positives. Cheap version: composite segmented UMD tools onto random indoor/texture backgrounds (promoted from Phase 5's synthetic clutter idea). Directly attacks the dominant failure mode; highest-value data-side change for the startup use case.
+# Model improvement backlog
 
-**Cleaner normal ground truth.** `np.gradient` on raw Kinect-v1 depth amplifies 3–5 mm sensor noise into 8–15° angular noise — the acknowledged GT noise floor. Bilateral-filter or median-smooth the depth before differentiation, or fit planes over k×k neighbourhoods instead of 2-tap gradients. Raises the achievable normals ceiling without touching the model.
+Independent of the two tracks, these raise the ceiling and several feed directly into A1/A3. Ordered by return on effort.
 
-**Train/inference scale alignment.** Training center-crops 448² from 640×480 with no resize; `predict.py` crops the full image then resizes, so deployed objects appear at a different effective scale than anything seen in training. Add random-resized-crop augmentation at train time or match the predict-time preprocessing exactly.
+- **Bigger frozen backbone.** Swap ViT-S → `dinov2_vitb14_reg` (zero new trainable params; register variants give cleaner dense features). Likely the cheapest large accuracy gain. One hub string + `embed_dim` 384→768.
+- **LR schedule + checkpoint selection.** Constant 1e-4 oscillates after epoch 15. Add cosine decay with warmup; select best on val mean-IoU, not val loss; consider EMA of decoder weights.
+- **Loss calibration.** Five of seven classes saturate the `pos_weight` cap at 15, trading precision for recall — and the main in-the-wild failure is a precision failure. Lower the cap to ~5 and let per-channel Dice carry rare classes, or switch to focal loss. Pair with per-class inference thresholds.
+- **Negative background supervision.** UMD has no "textured surface that isn't a handle" negatives. Composite segmented UMD tools onto random indoor backgrounds. Highest-value data-side fix for the startup deployment case.
+- **Per-class inference thresholds.** A `--per_class_thresh` flag on `predict.py` (high for `grasp`, low for `contain`) cleans up qualitative output with no retraining. 10-line change, trivial.
+- **Per-tool class priors at eval.** Score only channels that exist on a given tool, removing the multi-label false-positive measurement artifact in `RESULTS.md` §3.4.
+- **Partial backbone unfreeze.** After decoder convergence, unfreeze the last 2–4 ViT blocks at ~1e-5 (or LoRA adapters) — the standard escape from the observed plateau.
+- **Cleaner normal GT + scale alignment.** Bilateral-filter depth before differentiation to lift the 24° normals ceiling; match train/predict preprocessing so deployed objects appear at the trained scale.
 
-**Metric and supervision hygiene (small).** `iou()` averages per-batch IoUs and drops batch-absent classes per batch — biased and noisy versus accumulating intersection and union over the full split and dividing once; the headline number may shift either way, worth knowing before the final report. Random erasing blanks RGB but leaves the mask intact, training the model to hallucinate affordances under occluders (consider excluding erased regions from the loss). The edge-aware smoothness weights are computed on ImageNet-normalised RGB, so the effective edge sharpness is roughly 4× the nominal 10 — it works, but the hyperparameter does not mean what the docstring implies.
+---
 
-## Recommended Ordering
+# Recommended critical path
 
-For the course timeline, the critical path is now: per-class inference thresholds (cleans up in-the-wild slides), then optionally the per-tool class priors (cleans up the per-tool table), then optionally the clutter-split evaluation (adds a quantitative robustness number). All three are low-risk and high-value if a few hours are available. Phases 3 and 4 belong in the future-work section of the report and form the bridge into the startup roadmap. For the startup, Phase 3 is the first real integration milestone, Phase 4 (option one) is the path to a working demo, Phase 4 (option three) is the path to a reliability story, and Phase 4 (option two) is the long-term research bet that differentiates the company from teams using off-the-shelf perception.
+1. **A1** (fix bugs, retrain) — nothing is publishable until the numbers are honest.
+2. **A2** (standard protocol + external baseline) — the gate every reviewer checks.
+3. **B1** (factored per-object pipeline) — fixes the headline failure mode, foundation for the VLA story.
+4. **B2** (VLA verifier) — the smallest real VLA contribution, gives a measurable result.
+5. **A3 + A4** (ablations + robustness) — round out the experimental section.
+6. **A5 + A6** (contribution framing + write-up) — assemble the paper.
+
+B3 is the first startup product milestone; B4 is the long-term research bet and the next paper. Confirm the target workshop's exact deadline before locking scope — it decides whether this is a few-week workshop sprint or a 2027 full-paper effort.

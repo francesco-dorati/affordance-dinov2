@@ -16,6 +16,8 @@ The final model is a frozen DINOv2 ViT-Small backbone feeding a multi-scale fusi
 
 Compared to the binary baseline (2-class supervision on `grasp` and `wrap-grasp` only), the final model adds five previously-invisible affordance classes, restores bowls and turners from 0% / 11% IoU to 98% / 51% respectively, and raises the headline IoU number on a strictly harder evaluation task.
 
+> **Metric & split note (June 13, 2026).** The numbers above are **mean-IoU** on the legacy ad-hoc instance split, and were produced *before* the normal-rotation fix. They are **not** comparable to the affordance literature, which reports the **weighted F-measure** $F_\beta^\omega$ ($\beta^2{=}0.3$) on the Myers et al. 2015 split (AffordanceNet UMD Table II: average **0.799**, DeepLab 0.733, ED-RGB 0.766). Tooling for a comparable run is now in place: canonical `novel_instance` / `category` splits (`utils/dataset.py`), $F_\beta^\omega$ (`utils/metrics.py`), and the verified normals/IoU fixes. The next retrain (`--split_type novel_instance`) followed by `evaluate.py` (`--wfb`, on by default) will produce the benchmark-comparable table; results to be appended as §3.6.
+
 ## 2. Training Trajectory
 
 The project went through three distinct training configurations. Each is preserved or reproducible; quantitative deltas between phases are the basis of the experimental analysis in Section 4.

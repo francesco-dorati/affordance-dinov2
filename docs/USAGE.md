@@ -34,6 +34,11 @@ python scripts/train.py --resume --epochs 40
 
 # Train on Google Drive checkpoints (Colab variant).
 python scripts/train.py --use_drive --epochs 25
+
+# Canonical UMD splits (default is novel_instance — the AffordanceNet protocol).
+python scripts/train.py --epochs 40 --split_type novel_instance   # default
+python scripts/train.py --epochs 40 --split_type category         # harder, novel-category
+python scripts/train.py --epochs 40 --split_type file --split_file data/splits/umd_official.json
 ```
 
 Outputs land in `checkpoints/`:
@@ -66,6 +71,12 @@ trajectory plots.
 | `--weight_clip` | 15.0 | Cap on per-class `pos_weight`. |
 | `--resume` | off | Load `checkpoints/last.pth` and continue. |
 | `--use_drive` | off | Write checkpoints to `/content/drive/MyDrive/...` (Colab). |
+| `--split_type` | `novel_instance` | UMD split protocol: `novel_instance` (Myers per-category instance holdout, AffordanceNet Table II protocol), `category` (whole-category holdout), `file` (official lists), `instance` (legacy ad-hoc). The exact assignment is saved to `split_<type>.json`. |
+| `--split_file` | none | JSON `{"train":[...],"test":[...]}` of tool-instance names for `--split_type file`. |
+| `--val_wfb` | **ON** | Compute val weighted F-measure $F_\beta^\omega$ each epoch and save `best_wfb.pth` on it. `--no-val_wfb` to skip. |
+| `--val_wfb_batches` | 20 | Limit per-epoch F-measure to the first N val batches (cheap estimate). 0 = full val set. Authoritative full number comes from `evaluate.py`. |
+
+Checkpoint selection: `best.pth` is chosen on val dataset-level mean-IoU; `best_wfb.pth` is chosen on val $F_\beta^\omega$ (the metric the paper reports). They are kept separate so neither criterion silently overrides the other.
 
 ## 3. Evaluation
 
@@ -78,16 +89,34 @@ python scripts/evaluate.py --checkpoint checkpoints/last.pth --split all
 
 # Write the JSON elsewhere.
 python scripts/evaluate.py --output_dir reports/some_run
+
+# Benchmark-comparable: weighted F-measure on the AffordanceNet split.
+python scripts/evaluate.py --split_type novel_instance          # --wfb is ON by default
+python scripts/evaluate.py --split_type category --no-wfb       # IoU only, faster
 ```
 
-Produces `checkpoints/evaluation_<split>.json` with:
+Produces `checkpoints/evaluation_<split>.json` (and `split_<type>.json`) with:
 
 - IoU at thresholds 0.3 / 0.4 / 0.5 / 0.6 / 0.7 (overall, per-tool, per-class).
+- **Weighted F-measure $F_\beta^\omega$ ($\beta^2{=}0.3$)** per class and average — the metric used by AffordanceNet on UMD (their average 0.799; DeepLab 0.733; ED-RGB 0.766). This is the row to put in a comparison table. On by default; `--no-wfb` to skip (it runs per-image distance transforms and is slower than IoU).
 - Mean angular error in degrees over the union of all affordance pixels.
 - NYUv2 angular bins (fraction ≤ 11.25° / 22.5° / 30°).
 - `per_class_overall` and per-tool `iou@0.5_per_class` breakdowns.
 
+> Note: report $F_\beta^\omega$, **not** IoU, when comparing to the literature — they are different metrics and not interchangeable. The historical 0.7697 headline is mean-IoU and is not comparable to AffordanceNet's 0.799.
+
 A console summary prints the overall metrics plus per-class IoU @ 0.5.
+
+### 3b. DeepLabv3 baseline (paper comparison control)
+
+`scripts/train_baseline.py` trains a standard DeepLabv3-ResNet50 on the **same split** and scores it with the **same** $F_\beta^\omega$ — your controlled, same-code comparison alongside AffordanceNet's published numbers.
+
+```bash
+python scripts/train_baseline.py --epochs 40 --split_type novel_instance --batch_size 8
+# -> checkpoints_baseline/evaluation_baseline.json  (per-class + average F-measure)
+```
+
+It is affordance-mask only (no normals), trains the ResNet backbone end-to-end (the main model freezes DINOv2), and uses the same `DiceBCELoss`. Reproducing DeepLab ≈0.733 here validates the $F_\beta^\omega$ implementation. **Speed/memory:** because the whole ResNet-50 backbone is fine-tuned (vs the main model's frozen backbone, which stores no backbone activations for the backward pass), expect per-epoch wall-time in the same ballpark but somewhat slower, and higher GPU memory — if you hit OOM, halve `--batch_size`. It typically needs comparable or fewer epochs since the backbone adapts to the data.
 
 ## 4. Training Curves and Sample Grids
 

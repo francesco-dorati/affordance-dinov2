@@ -45,8 +45,9 @@ from config import (
 )
 from models.backbone import DINOv2Backbone
 from models.decoder import MultiTaskDecoder
-from utils.dataset import UMDAffordanceDataset, instance_split
+from utils.dataset import UMDAffordanceDataset, make_split, save_split_definition
 from utils.losses import iou_accumulate, iou_from_accumulated
+from utils.metrics import weighted_f_measure_per_class
 
 
 # =====================================================================
@@ -63,6 +64,19 @@ def get_args():
                         '(default: same directory as the checkpoint)')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--val_frac', type=float, default=0.2)
+    p.add_argument('--split_type', type=str, default='novel_instance',
+                   choices=['novel_instance', 'category', 'file', 'instance'],
+                   help='UMD split protocol. novel_instance = Myers per-category '
+                        'instance holdout (AffordanceNet Table II protocol); '
+                        'category = whole-category holdout; file = official lists '
+                        'from --split_file; instance = legacy ad-hoc split.')
+    p.add_argument('--split_file', type=str, default=None,
+                   help='JSON {"train":[...],"test":[...]} for split_type=file.')
+    from argparse import BooleanOptionalAction
+    p.add_argument('--wfb', action=BooleanOptionalAction, default=True,
+                   help='Compute the weighted F-measure F_beta^omega (beta^2=0.3), '
+                        'the metric used by AffordanceNet on UMD. Slower than IoU '
+                        '(per-image distance transforms); disable with --no-wfb.')
     return p.parse_args()
 
 
@@ -136,7 +150,10 @@ def main():
     ds = UMDAffordanceDataset(
         raw_dir=RAW_TOOLS, intrinsics=TRAIN_INTRINSICS, augment=False,
     )
-    train_idx, val_idx = instance_split(ds, seed=args.seed, val_frac=args.val_frac)
+    train_idx, val_idx = make_split(
+        ds, split_type=args.split_type, seed=args.seed,
+        val_frac=args.val_frac, split_file=args.split_file,
+    )
     if args.split == 'val':
         indices = val_idx
     elif args.split == 'train':
@@ -145,7 +162,7 @@ def main():
         indices = list(range(len(ds)))
     loader = DataLoader(Subset(ds, indices), batch_size=args.batch_size,
                         shuffle=False, num_workers=2, pin_memory=True)
-    print(f"Split: {args.split} | n_samples: {len(indices)}")
+    print(f"Split: {args.split} ({args.split_type}) | n_samples: {len(indices)}")
 
     # ---- Model ----
     backbone = DINOv2Backbone(freeze=True).to(DEVICE).eval()
@@ -165,6 +182,7 @@ def main():
     # aggregation later.
     per_sample = []   # list of dicts
     per_sample_iou_class = {t: [] for t in IOU_THRESHOLDS}  # list of np.ndarray [C]
+    per_sample_wfb_class = []  # list of np.ndarray [C] — weighted F-measure
     per_sample_tool = []
     # Dataset-level IoU: accumulate per-class intersection/union pixel counts
     # over the whole split and divide once at the end. Unlike the per-sample
@@ -195,6 +213,12 @@ def main():
                 union_sums[t] += b_union
             angle_rows = batch_angle_stats(pred_normals, gt_normals, gt_mask)
 
+            # Weighted F-measure (AffordanceNet's UMD metric) consumes the
+            # continuous per-class probability map, not a thresholded mask.
+            if args.wfb:
+                probs_np = torch.sigmoid(mask_logits).cpu().numpy()  # [B, C, H, W]
+                gt_np = gt_mask.cpu().numpy()                        # [B, C, H, W]
+
             B = rgb.shape[0]
             for i in range(B):
                 rec = {'tool': tools[i]}
@@ -204,6 +228,11 @@ def main():
                     valid = sample_class_iou[~np.isnan(sample_class_iou)]
                     rec[f'iou@{t:.1f}'] = float(valid.mean()) if valid.size else float('nan')
                     per_sample_iou_class[t].append(sample_class_iou)
+                if args.wfb:
+                    wfb_c = weighted_f_measure_per_class(probs_np[i], gt_np[i])  # [C]
+                    valid_w = wfb_c[~np.isnan(wfb_c)]
+                    rec['wfb'] = float(valid_w.mean()) if valid_w.size else float('nan')
+                    per_sample_wfb_class.append(wfb_c)
                 ang = angle_rows[i]
                 rec['angle_deg_mean'] = ang[0]
                 for j, b in enumerate(ANGLE_BINS_DEG):
@@ -226,6 +255,21 @@ def main():
     overall['angle_deg_mean'] = _avg('angle_deg_mean')
     for b in ANGLE_BINS_DEG:
         overall[f'frac_le_{b}'] = _avg(f'frac_le_{b}')
+
+    # ---- Aggregate (weighted F-measure, the AffordanceNet UMD metric) ----
+    # Per-class: nan-mean over images (skipping images where the class is
+    # absent). Average row: mean across classes — matches AffordanceNet Table II.
+    per_class_wfb = None
+    if args.wfb and per_sample_wfb_class:
+        arr = np.stack(per_sample_wfb_class, axis=0)  # [N, C]
+        with np.errstate(all='ignore'):
+            class_means = np.nanmean(arr, axis=0)
+        per_class_wfb = {
+            cls: (None if np.isnan(m) else float(m))
+            for cls, m in zip(AFFORDANCE_CLASSES, class_means)
+        }
+        valid_means = class_means[~np.isnan(class_means)]
+        overall['wfb'] = float(valid_means.mean()) if valid_means.size else None
 
     # ---- Aggregate (dataset-level IoU) ----
     overall_dataset = {}
@@ -282,6 +326,7 @@ def main():
     report = {
         'checkpoint': str(ckpt_path),
         'split': args.split,
+        'split_type': args.split_type,
         'n_samples': len(per_sample),
         'n_tools': len(per_tool_summary),
         'n_affordance_classes': N_AFFORDANCE_CLASSES,
@@ -291,11 +336,15 @@ def main():
         'overall_dataset': overall_dataset,
         'per_class_overall': per_class_overall,
         'per_class_dataset': per_class_dataset,
+        'per_class_wfb': per_class_wfb,  # weighted F-measure, AffordanceNet metric
         'per_tool': per_tool_summary,
     }
     out_path = out_dir / f"evaluation_{args.split}.json"
     with open(out_path, 'w') as f:
         json.dump(report, f, indent=2)
+    # Persist the exact split used, so the run is reproducible / comparable.
+    save_split_definition(ds, train_idx, val_idx,
+                          out_dir / f"split_{args.split_type}.json")
 
     # ---- Console summary ----
     print("\n=== OVERALL mean-IoU (per-sample mean | dataset-level) ===")
@@ -313,6 +362,16 @@ def main():
         v_str = "  n/a" if v is None else f"{v:.4f}"
         d_str = "  n/a" if d is None else f"{d:.4f}"
         print(f"  {cls:12s} : {v_str} | {d_str}")
+
+    if per_class_wfb is not None:
+        # This is the table to compare against AffordanceNet UMD Table II
+        # (their average = 0.799; DeepLab = 0.733; ED-RGB = 0.766).
+        print("\n=== WEIGHTED F-MEASURE  F_beta^omega (beta^2=0.3) — AffordanceNet metric ===")
+        for cls in AFFORDANCE_CLASSES:
+            w = per_class_wfb[cls]
+            print(f"  {cls:12s} : {'  n/a' if w is None else f'{w:.4f}'}")
+        avg = overall.get('wfb')
+        print(f"  {'AVERAGE':12s} : {'  n/a' if avg is None else f'{avg:.4f}'}")
     print(f"\nFull report written to: {out_path}")
 
 

@@ -209,7 +209,9 @@ def instance_split(dataset, seed: int = 42, val_frac: float = 0.2):
     Uses a local RandomState so the global numpy RNG is not perturbed. Tools
     are shuffled once with the given seed; the first (1 - val_frac) fraction
     by tool name go into the train set, the remainder into val. This is an
-    instance-split: a tool seen at training is NEVER seen at validation.
+    ad-hoc instance-split: a tool seen at training is NEVER seen at validation,
+    but whole categories can land entirely in one side. Kept for backward
+    compatibility with earlier runs; prefer the canonical Myers protocols below.
     """
     all_tools = sorted({s[0] for s in dataset.samples})
     rng = np.random.RandomState(seed)
@@ -219,3 +221,131 @@ def instance_split(dataset, seed: int = 42, val_frac: float = 0.2):
     train_idx = [i for i, s in enumerate(dataset.samples) if s[0] in train_tools]
     val_idx   = [i for i, s in enumerate(dataset.samples) if s[0] not in train_tools]
     return train_idx, val_idx
+
+
+# =====================================================================
+# Canonical UMD splits (Myers et al. 2015 protocols)
+# =====================================================================
+# UMD ships 105 object instances across 17 categories. The affordance
+# literature reports on two protocols defined by Myers et al. 2015:
+#
+#   * novel-instance split  — every category appears in BOTH train and test,
+#     but with different object instances (e.g. knife_01..knife_09 train,
+#     knife_10..knife_12 test). Measures within-category generalization.
+#     This is the protocol whose numbers populate AffordanceNet's UMD Table II.
+#
+#   * category split         — entire categories are held out for test (e.g.
+#     no mug appears in training). Measures novel-category generalization;
+#     strictly harder, because methods cannot lean on a category prior.
+#
+# IMPORTANT — exact comparability: the instance/category assignment below is a
+# deterministic, documented realization of each protocol, writable to
+# data/splits/*.json so a run is fully reproducible and inspectable. To match
+# published AffordanceNet numbers to the decimal, drop the official UMD split
+# lists into a JSON file ({"train":[...], "test":[...]} of tool-instance names)
+# and load with split_type="file" — no code change needed.
+
+def category_of(tool_name: str) -> str:
+    """'knife_07' -> 'knife'. Strips the trailing instance index."""
+    return tool_name.rsplit("_", 1)[0]
+
+
+def _indices_for_tools(dataset, train_tools, test_tools):
+    train_tools, test_tools = set(train_tools), set(test_tools)
+    train_idx = [i for i, s in enumerate(dataset.samples) if s[0] in train_tools]
+    test_idx  = [i for i, s in enumerate(dataset.samples) if s[0] in test_tools]
+    return train_idx, test_idx
+
+
+def novel_instance_split(dataset, seed: int = 42, val_frac: float = 0.2):
+    """Per-category instance holdout (Myers novel-instance protocol).
+
+    For each category, a deterministic fraction of its instances go to val and
+    the rest to train, so all 17 categories appear on both sides. Categories
+    with a single instance keep it in train (cannot be split). Returns
+    (train_indices, val_indices).
+    """
+    by_cat = {}
+    for tool in sorted({s[0] for s in dataset.samples}):
+        by_cat.setdefault(category_of(tool), []).append(tool)
+
+    rng = np.random.RandomState(seed)
+    train_tools, test_tools = [], []
+    for cat in sorted(by_cat):
+        insts = sorted(by_cat[cat])
+        rng.shuffle(insts)
+        n_test = int(round(val_frac * len(insts)))
+        if len(insts) > 1:
+            n_test = max(1, min(n_test, len(insts) - 1))  # keep >=1 each side
+        else:
+            n_test = 0
+        test_tools += insts[:n_test]
+        train_tools += insts[n_test:]
+    return _indices_for_tools(dataset, train_tools, test_tools)
+
+
+# Default held-out categories for the category split. Documented and swappable;
+# replace with the official Myers test-category list for exact comparability.
+DEFAULT_TEST_CATEGORIES = ("bowl", "knife", "mug", "trowel")
+
+
+def category_split(dataset, test_categories=DEFAULT_TEST_CATEGORIES):
+    """Whole-category holdout (Myers category protocol).
+
+    Every instance of each category in `test_categories` goes to test; all
+    other categories go to train. Returns (train_indices, test_indices).
+    """
+    test_categories = set(test_categories)
+    all_tools = sorted({s[0] for s in dataset.samples})
+    train_tools = [t for t in all_tools if category_of(t) not in test_categories]
+    test_tools  = [t for t in all_tools if category_of(t) in test_categories]
+    return _indices_for_tools(dataset, train_tools, test_tools)
+
+
+def load_split(dataset, split_file):
+    """Load a split from JSON: {"train": [tool names], "test": [tool names]}.
+
+    Tool names are instance names (e.g. "knife_07"). Use this with the official
+    UMD split lists for exact comparability with published results.
+    """
+    import json
+    with open(split_file) as fh:
+        spec = json.load(fh)
+    return _indices_for_tools(dataset, spec["train"], spec["test"])
+
+
+def save_split_definition(dataset, train_idx, val_idx, out_path):
+    """Persist a split's tool-instance lists to JSON for reproducibility."""
+    import json
+    train_tools = sorted({dataset.samples[i][0] for i in train_idx})
+    test_tools  = sorted({dataset.samples[i][0] for i in val_idx})
+    with open(out_path, "w") as fh:
+        json.dump({"train": train_tools, "test": test_tools}, fh, indent=2)
+    return out_path
+
+
+def make_split(dataset, split_type: str = "novel_instance",
+               seed: int = 42, val_frac: float = 0.2,
+               split_file: str = None, test_categories=DEFAULT_TEST_CATEGORIES):
+    """Dispatcher used by train.py / evaluate.py.
+
+    split_type:
+        'novel_instance' — Myers per-category instance holdout (default, the
+                           protocol behind AffordanceNet's UMD Table II).
+        'category'       — Myers whole-category holdout (harder, novel-category).
+        'file'           — load explicit lists from `split_file` (official UMD
+                           splits for exact comparability).
+        'instance'       — legacy ad-hoc by-tool random split (back-compat).
+    Returns (train_indices, val_indices).
+    """
+    if split_type == "novel_instance":
+        return novel_instance_split(dataset, seed=seed, val_frac=val_frac)
+    if split_type == "category":
+        return category_split(dataset, test_categories=test_categories)
+    if split_type == "file":
+        if not split_file:
+            raise ValueError("split_type='file' requires --split_file")
+        return load_split(dataset, split_file)
+    if split_type == "instance":
+        return instance_split(dataset, seed=seed, val_frac=val_frac)
+    raise ValueError(f"unknown split_type: {split_type}")

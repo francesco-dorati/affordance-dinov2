@@ -43,7 +43,8 @@ from models.backbone import DINOv2Backbone
 from models.decoder import MultiTaskDecoder
 from utils.dataset import (
     UMDAffordanceDataset,
-    instance_split,
+    make_split,
+    save_split_definition,
     compute_class_pixel_counts,
 )
 from utils.losses import (
@@ -56,6 +57,7 @@ from utils.losses import (
     iou_accumulate,
     iou_from_accumulated,
 )
+from utils.metrics import weighted_f_measure_per_class
 from utils.training_logger import JSONLLogger
 
 
@@ -94,6 +96,28 @@ def get_args():
     p.add_argument('--weight_clip', type=float, default=15.0,
                    help="Cap on per-class pos_weight to prevent rare classes "
                         "from dominating the BCE gradient.")
+    p.add_argument('--split_type', type=str, default='novel_instance',
+                   choices=['novel_instance', 'category', 'file', 'instance'],
+                   help="UMD split protocol. novel_instance = Myers per-category "
+                        "instance holdout (default; the protocol behind "
+                        "AffordanceNet's UMD Table II). category = whole-category "
+                        "holdout (harder). file = official lists from --split_file. "
+                        "instance = legacy ad-hoc split (pre-2026 runs).")
+    p.add_argument('--split_file', type=str, default=None,
+                   help='JSON {"train":[...],"test":[...]} for --split_type file.')
+    p.add_argument('--val_wfb', action=BooleanOptionalAction, default=True,
+                   help="Compute weighted F-measure F_beta^omega on val each "
+                        "epoch (the AffordanceNet UMD metric). Saves best_wfb.pth "
+                        "on it. ON by default; --no-val_wfb to skip.")
+    p.add_argument('--val_wfb_batches', type=int, default=20,
+                   help="Limit per-epoch F-measure to the first N val batches "
+                        "(cheap estimate for tracking/selection). 0 = full val "
+                        "set. The authoritative full number comes from evaluate.py.")
+    p.add_argument('--output_dir', type=str, default=None,
+                   help="Checkpoint/log directory for this run. Default: "
+                        "checkpoints/ (or the Drive path with --use_drive). "
+                        "Give each experiment its own dir so runs don't collide "
+                        "and each can --resume independently.")
     return p.parse_args()
 
 
@@ -157,11 +181,21 @@ def get_or_compute_class_weights(dataset, train_idx, cache_path,
     return torch.tensor(weights, dtype=torch.float32)
 
 
-def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
-    """Run one full pass over `loader` and return aggregated metrics."""
+def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal,
+                    compute_wfb: bool = False, wfb_max_batches: int = 0):
+    """Run one full pass over `loader` and return aggregated metrics.
+
+    If compute_wfb is True, also computes the weighted F-measure F_beta^omega
+    (the AffordanceNet UMD metric). It runs per-image distance transforms, so
+    it is the slow part of an eval; `wfb_max_batches` (>0) limits it to the
+    first N batches as a cheap per-epoch ESTIMATE for tracking / checkpoint
+    selection. The authoritative full-split number comes from scripts/evaluate.py.
+    """
+    import numpy as np
     decoder.eval()
     sums = dict(loss=0.0, loss_mask=0.0, loss_normal=0.0,
                 iou=0.0, angle_deg=0.0, n=0)
+    wfb_rows = []  # list of per-class [C] arrays
     # Per-class IoU: sum + count separately so absent classes (None) don't
     # poison the average for a given epoch.
     iou_c_sum = [0.0] * N_AFFORDANCE_CLASSES
@@ -172,7 +206,7 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
     inter_sum = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
     union_sum = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
     with torch.no_grad():
-        for batch in loader:
+        for b_idx, batch in enumerate(loader):
             rgb        = batch['rgb'].to(device)
             gt_mask    = batch['mask'].to(device)
             gt_normals = batch['normals'].to(device)
@@ -198,6 +232,13 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
             if not torch.isnan(ang):
                 sums['angle_deg'] += ang.item()
             sums['n'] += 1
+
+            # Weighted F-measure (optional, on the continuous probability map).
+            if compute_wfb and (wfb_max_batches == 0 or b_idx < wfb_max_batches):
+                probs = torch.sigmoid(mask_logits).cpu().numpy()
+                gtn   = gt_mask.cpu().numpy()
+                for s in range(probs.shape[0]):
+                    wfb_rows.append(weighted_f_measure_per_class(probs[s], gtn[s]))
     n = max(sums['n'], 1)
     out = {k: (v / n if k != 'n' else v) for k, v in sums.items()}
     out['iou_per_class'] = [
@@ -206,6 +247,18 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal):
     ]
     out['iou_dataset'], out['iou_dataset_per_class'] = \
         iou_from_accumulated(inter_sum, union_sum)
+    # Weighted F-measure aggregate: per-class nan-mean over images, then mean
+    # across classes (AffordanceNet Table II format). None when not computed.
+    if compute_wfb and wfb_rows:
+        arr = np.stack(wfb_rows, axis=0)  # [N, C]
+        with np.errstate(all='ignore'):
+            class_means = np.nanmean(arr, axis=0)
+        out['wfb_per_class'] = [None if np.isnan(m) else float(m) for m in class_means]
+        valid = class_means[~np.isnan(class_means)]
+        out['wfb'] = float(valid.mean()) if valid.size else None
+    else:
+        out['wfb_per_class'] = None
+        out['wfb'] = None
     return out
 
 
@@ -216,8 +269,12 @@ def main():
     args = get_args()
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-    CKPT_DIR = (Path("/content/drive/MyDrive/robotic_affordance_project/checkpoints")
-                if args.use_drive else PROJECT_ROOT / "checkpoints")
+    if args.output_dir:
+        CKPT_DIR = Path(args.output_dir)
+    elif args.use_drive:
+        CKPT_DIR = Path("/content/drive/MyDrive/robotic_affordance_project/checkpoints")
+    else:
+        CKPT_DIR = PROJECT_ROOT / "checkpoints"
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Device: {DEVICE} | Checkpoints: {CKPT_DIR}")
 
@@ -240,7 +297,15 @@ def main():
         raw_dir=RAW_TOOLS, intrinsics=TRAIN_INTRINSICS,
         augment=False,
     )
-    train_idx, val_idx = instance_split(train_ds, seed=42, val_frac=0.2)
+    train_idx, val_idx = make_split(
+        train_ds, split_type=args.split_type, seed=42, val_frac=0.2,
+        split_file=args.split_file,
+    )
+    # Persist the exact instance assignment so the run is reproducible and the
+    # numbers are comparable to the same split at eval time.
+    save_split_definition(train_ds, train_idx, val_idx,
+                          CKPT_DIR / f"split_{args.split_type}.json")
+    print(f"Split: {args.split_type} | n_train={len(train_idx)} n_val={len(val_idx)}")
 
     train_loader = DataLoader(Subset(train_ds, train_idx),
                               batch_size=args.batch_size, shuffle=True,
@@ -275,7 +340,7 @@ def main():
     # 5x-weighted normal term, so its minimum need not coincide with the
     # best segmentation. best_val (loss) is still tracked for logging and
     # for resuming from pre-change checkpoints.
-    start_epoch, best_val, best_miou = 0, float('inf'), -1.0
+    start_epoch, best_val, best_miou, best_wfb = 0, float('inf'), -1.0, -1.0
     last_ckpt = CKPT_DIR / "last.pth"
     if args.resume and last_ckpt.exists():
         ck = torch.load(last_ckpt, map_location=DEVICE)
@@ -284,6 +349,7 @@ def main():
         start_epoch = ck['epoch'] + 1
         best_val = ck['best_val']
         best_miou = ck.get('best_miou', -1.0)  # absent in older checkpoints
+        best_wfb = ck.get('best_wfb', -1.0)    # absent in older checkpoints
         print(f"Resumed at epoch {start_epoch}  | best val {best_val:.4f} "
               f"| best mIoU {best_miou:.4f}")
 
@@ -377,7 +443,9 @@ def main():
             # ---- VAL ----
             t0 = time.time()
             val_metrics = evaluate_loader(backbone, decoder, val_loader,
-                                          DEVICE, mask_loss_fn, args.w_normal)
+                                          DEVICE, mask_loss_fn, args.w_normal,
+                                          compute_wfb=args.val_wfb,
+                                          wfb_max_batches=args.val_wfb_batches)
             val_dur = time.time() - t0
             logger.log(epoch=epoch + 1, phase="val",
                        loss=val_metrics['loss'],
@@ -387,14 +455,18 @@ def main():
                        iou_dataset=val_metrics['iou_dataset'],
                        iou_per_class=val_metrics['iou_per_class'],
                        iou_dataset_per_class=val_metrics['iou_dataset_per_class'],
+                       wfb=val_metrics['wfb'],
+                       wfb_per_class=val_metrics['wfb_per_class'],
                        angle_deg=val_metrics['angle_deg'],
                        duration_s=val_dur,
                        n_batches=val_metrics['n'])
 
+            wfb_str = (f" WFb {val_metrics['wfb']:.3f}"
+                       if val_metrics['wfb'] is not None else "")
             print(f"E{epoch+1} | lr {epoch_lr:.2e} | "
                   f"Train L {train_metrics['loss']:.4f} IoU {train_metrics['iou']:.3f} Ang {train_metrics['angle_deg']:.2f}° "
                   f"| Val L {val_metrics['loss']:.4f} IoU {val_metrics['iou']:.3f} "
-                  f"dIoU {val_metrics['iou_dataset']:.3f} Ang {val_metrics['angle_deg']:.2f}°")
+                  f"dIoU {val_metrics['iou_dataset']:.3f}{wfb_str} Ang {val_metrics['angle_deg']:.2f}°")
 
             # ---- SAVE ----
             if val_metrics['loss'] < best_val:
@@ -408,9 +480,18 @@ def main():
                            val_iou_dataset=val_metrics['iou_dataset'],
                            val_angle_deg=val_metrics['angle_deg'])
                 print("   new best saved (val dataset mIoU)")
+            # Separately track the benchmark metric: best_wfb.pth is selected on
+            # val weighted F-measure (what the paper reports). Kept distinct from
+            # best.pth so neither selection criterion is silently overridden.
+            if val_metrics['wfb'] is not None and val_metrics['wfb'] > best_wfb:
+                best_wfb = val_metrics['wfb']
+                torch.save(decoder.state_dict(), CKPT_DIR / "best_wfb.pth")
+                logger.log(event="best_wfb", epoch=epoch + 1,
+                           val_wfb=val_metrics['wfb'])
+                print(f"   new best saved (val F_beta^omega = {best_wfb:.4f})")
             torch.save({'epoch': epoch, 'model': decoder.state_dict(),
                         'optim': optimizer.state_dict(), 'best_val': best_val,
-                        'best_miou': best_miou},
+                        'best_miou': best_miou, 'best_wfb': best_wfb},
                        last_ckpt)
 
         logger.log(event="end", epochs_completed=args.epochs,
