@@ -77,6 +77,17 @@ def evaluate(model, loader, device, loss_fn, compute_wfb, wfb_max_batches):
     inter = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
     union = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
     wfb_rows = []
+    # Spread the WFb-scored batches evenly across the whole (unshuffled, tool-
+    # sorted) split, otherwise the first N contiguous batches are a single tool
+    # family (e.g. all bowls -> only the 'contain' class has GT). Deterministic.
+    wfb_batch_ids = None  # None => score every batch
+    if compute_wfb and wfb_max_batches > 0:
+        total = len(loader)
+        if wfb_max_batches < total:
+            wfb_batch_ids = set(
+                int(i) for i in
+                np.linspace(0, total - 1, wfb_max_batches).round().astype(int)
+            )
     for b_idx, batch in enumerate(loader):
         rgb = batch['rgb'].to(device)
         gt = batch['mask'].to(device)
@@ -86,7 +97,7 @@ def evaluate(model, loader, device, loss_fn, compute_wfb, wfb_max_batches):
         bi, bu = iou_accumulate(logits, gt)
         inter += bi
         union += bu
-        if compute_wfb and (wfb_max_batches == 0 or b_idx < wfb_max_batches):
+        if compute_wfb and (wfb_batch_ids is None or b_idx in wfb_batch_ids):
             probs = torch.sigmoid(logits).cpu().numpy()
             gtn = gt.cpu().numpy()
             for s in range(probs.shape[0]):

@@ -205,6 +205,20 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal,
     # number used for best-checkpoint selection.
     inter_sum = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
     union_sum = torch.zeros(N_AFFORDANCE_CLASSES, device=device)
+    # Pick which batches feed the WFb estimate. The val loader is NOT shuffled
+    # and the split is sorted by tool, so the first N contiguous batches are a
+    # single tool family (e.g. all bowls -> only the 'contain' class has GT,
+    # every other class is NaN). Instead, spread the N scored batches evenly
+    # across the whole split so all tools/classes are represented. Deterministic
+    # across epochs, so best_wfb.pth selection is stable and meaningful.
+    wfb_batch_ids = None  # None => score every batch
+    if compute_wfb and wfb_max_batches > 0:
+        total = len(loader)
+        if wfb_max_batches < total:
+            wfb_batch_ids = set(
+                int(i) for i in
+                np.linspace(0, total - 1, wfb_max_batches).round().astype(int)
+            )
     with torch.no_grad():
         for b_idx, batch in enumerate(loader):
             rgb        = batch['rgb'].to(device)
@@ -234,7 +248,7 @@ def evaluate_loader(backbone, decoder, loader, device, mask_loss_fn, w_normal,
             sums['n'] += 1
 
             # Weighted F-measure (optional, on the continuous probability map).
-            if compute_wfb and (wfb_max_batches == 0 or b_idx < wfb_max_batches):
+            if compute_wfb and (wfb_batch_ids is None or b_idx in wfb_batch_ids):
                 probs = torch.sigmoid(mask_logits).cpu().numpy()
                 gtn   = gt_mask.cpu().numpy()
                 for s in range(probs.shape[0]):
